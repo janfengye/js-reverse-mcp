@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import {persistBrowserState} from '../browser.js';
 import {zod} from '../third_party/index.js';
 
 import {ToolCategory} from './categories.js';
@@ -11,6 +12,30 @@ import {defineTool, timeoutSchema} from './ToolDefinition.js';
 
 // Default navigation timeout in milliseconds (10 seconds)
 const DEFAULT_NAV_TIMEOUT = 10000;
+
+/** Check if the page was blocked by anti-bot systems (poisoned state). */
+async function isBlockedByAntiBot(page: import('../third_party/index.js').Page): Promise<boolean> {
+  try {
+    const url = page.url();
+    // Cloudflare challenge page
+    if (url.includes('challenges.cloudflare.com')) return true;
+
+    const title = await page.title();
+    // Cloudflare 5s shield
+    if (title.includes('Just a moment')) return true;
+
+    // Check body text for common block patterns
+    const bodySnippet = await page.evaluate(() => document.body?.innerText?.substring(0, 500) || '').catch(() => '');
+    // Zhihu 40362 block
+    if (bodySnippet.includes('40362') || bodySnippet.includes('暂时限制本次访问')) return true;
+    // Google reCAPTCHA
+    if (bodySnippet.includes('unusual traffic') || bodySnippet.includes('detected unusual traffic')) return true;
+
+    return false;
+  } catch {
+    return false;
+  }
+}
 
 export const listPages = defineTool({
   name: 'list_pages',
@@ -73,6 +98,11 @@ export const newPage = defineTool({
       referer: DEFAULT_REFERER,
     });
 
+    // Persist login state only when navigation succeeded without anti-bot blocks.
+    if (!await isBlockedByAntiBot(page)) {
+      await persistBrowserState();
+    }
+
     response.setIncludePages(true);
   },
 });
@@ -126,6 +156,9 @@ export const navigatePage = defineTool({
             waitUntil: 'domcontentloaded',
             referer: DEFAULT_REFERER,
           });
+          if (!await isBlockedByAntiBot(page)) {
+            await persistBrowserState();
+          }
           response.appendResponseLine(
             `Successfully navigated to ${request.params.url}.`,
           );

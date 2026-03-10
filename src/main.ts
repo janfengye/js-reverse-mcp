@@ -6,8 +6,6 @@
 
 import './polyfill.js';
 
-import fs from 'node:fs';
-
 import type {Channel} from './browser.js';
 import {ensureBrowserConnected, ensureBrowserLaunched} from './browser.js';
 import type {BrowserResult} from './browser.js';
@@ -59,14 +57,10 @@ server.server.setRequestHandler(SetLevelRequestSchema, () => {
 
 let context: McpContext;
 
-import {STEALTH_INIT_SCRIPT} from './stealth-init.js';
-
-// Combine stealth init script (unless disabled) with user-specified init script.
-const stealthScript = args.noStealth ? '' : STEALTH_INIT_SCRIPT;
-const userScript = args.initScript
-  ? fs.readFileSync(args.initScript, 'utf-8')
-  : '';
-const initScript = (stealthScript + '\n' + userScript).trim() || undefined;
+// No JS-level init scripts — Patchright's C++ patches + STEALTH_ARGS handle
+// anti-detection at the browser level. JS patches (Error.prepareStackTrace,
+// screen property overrides, fake chrome.runtime) actually CAUSE detection
+// because anti-bot systems check for Object.defineProperty tampering.
 
 async function getContext(): Promise<McpContext> {
   const extraArgs: string[] = (args.chromeArg ?? []).map(String);
@@ -81,7 +75,6 @@ async function getContext(): Promise<McpContext> {
       wsEndpoint: args.wsEndpoint,
       wsHeaders: args.wsHeaders,
       devtools,
-      initScript,
     });
   } else {
     result = await ensureBrowserLaunched({
@@ -94,7 +87,6 @@ async function getContext(): Promise<McpContext> {
       args: extraArgs,
       acceptInsecureCerts: args.acceptInsecureCerts,
       devtools,
-      initScript,
       hideCanvas: args.hideCanvas,
       blockWebrtc: args.blockWebrtc,
       disableWebgl: args.disableWebgl,
@@ -106,7 +98,6 @@ async function getContext(): Promise<McpContext> {
     context = await McpContext.from(result.context, logger, {
       experimentalDevToolsDebugging: devtools,
       experimentalIncludeAllPages: args.experimentalIncludeAllPages,
-      initScript,
     });
   }
   return context;

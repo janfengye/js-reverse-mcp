@@ -38,8 +38,6 @@ interface McpContextOptions {
   experimentalDevToolsDebugging: boolean;
   // Whether all page-like targets are exposed as pages.
   experimentalIncludeAllPages?: boolean;
-  // JavaScript to inject into every page before any other script runs.
-  initScript?: string;
 }
 
 const DEFAULT_TIMEOUT = 5_000;
@@ -150,9 +148,10 @@ export class McpContext implements Context {
 
   async #init() {
     await this.createPagesSnapshot();
-    if (this.#options.initScript) {
-      await this.browserContext.addInitScript({content: this.#options.initScript});
-    }
+    // NOTE: addInitScript is already called in browser.ts (launch/connect).
+    // Do NOT call it again here — double injection causes scripts to run twice
+    // per page load, which can create detectable discrepancies.
+
     // NOTE: CDP collectors are NOT initialized here.
     // They are lazily initialized on first tool use that needs them,
     // via ensureCollectorsInitialized(). This prevents CDP domain activation

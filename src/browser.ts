@@ -23,12 +23,32 @@ export interface BrowserResult {
 
 let browserResult: BrowserResult | undefined;
 
+// State file for persisting cookies/localStorage across sessions.
+// Only used in launch() + newContext() mode (non-isolated, no userDataDir).
+const STATE_DIR = path.join(os.homedir(), '.cache', 'chrome-devtools-mcp');
+const STATE_FILE = path.join(STATE_DIR, 'state.json');
+
+/**
+ * Persist browser context state (cookies + localStorage) to disk.
+ * Call this after successful navigations to preserve login sessions.
+ * Do NOT call after encountering anti-bot blocks to avoid saving poisoned state.
+ */
+export async function persistBrowserState(): Promise<void> {
+  if (!browserResult?.context) return;
+  try {
+    await fs.promises.mkdir(STATE_DIR, {recursive: true});
+    await browserResult.context.storageState({path: STATE_FILE});
+    logger('Browser state persisted to', STATE_FILE);
+  } catch (error) {
+    logger('Failed to persist browser state:', error);
+  }
+}
+
 export async function ensureBrowserConnected(options: {
   browserURL?: string;
   wsEndpoint?: string;
   wsHeaders?: Record<string, string>;
   devtools: boolean;
-  initScript?: string;
 }): Promise<BrowserResult> {
   if (browserResult) {
     return browserResult;
@@ -59,15 +79,6 @@ export async function ensureBrowserConnected(options: {
     throw new Error('No browser context found after connecting');
   }
 
-  if (options.initScript) {
-    await context.addInitScript({content: options.initScript});
-    // Also inject into all existing pages so the script is active on next navigation.
-    // context.addInitScript only affects newly created pages.
-    for (const page of context.pages()) {
-      await page.addInitScript({content: options.initScript});
-    }
-  }
-
   browserResult = {browser, context};
   return browserResult;
 }
@@ -86,7 +97,6 @@ interface McpLaunchOptions {
   };
   args?: string[];
   devtools: boolean;
-  initScript?: string;
   hideCanvas?: boolean;
   blockWebrtc?: boolean;
   disableWebgl?: boolean;
@@ -95,23 +105,6 @@ interface McpLaunchOptions {
 
 export async function launch(options: McpLaunchOptions): Promise<BrowserResult> {
   const {channel, executablePath, headless, isolated} = options;
-  const profileDirName =
-    channel && channel !== 'stable'
-      ? `chrome-profile-${channel}`
-      : 'chrome-profile';
-
-  let userDataDir = options.userDataDir;
-  if (!isolated && !userDataDir) {
-    userDataDir = path.join(
-      os.homedir(),
-      '.cache',
-      'chrome-devtools-mcp',
-      profileDirName,
-    );
-    await fs.promises.mkdir(userDataDir, {
-      recursive: true,
-    });
-  }
 
   const args: string[] = [
     ...DEFAULT_ARGS,
@@ -174,14 +167,11 @@ export async function launch(options: McpLaunchOptions): Promise<BrowserResult> 
     ignoreHTTPSErrors: options.acceptInsecureCerts ?? true,
   };
 
-  try {
-    let browser: Browser | undefined;
-    let context: BrowserContext;
-
-    if (userDataDir) {
-      // Use launchPersistentContext for user data dir
-      // This returns a BrowserContext directly (no separate Browser object)
-      context = await chromium.launchPersistentContext(userDataDir, {
+  // If user explicitly provides a userDataDir, use launchPersistentContext
+  // for full compatibility (IndexedDB, Cache Storage, Service Workers, etc.).
+  if (options.userDataDir) {
+    try {
+      const context = await chromium.launchPersistentContext(options.userDataDir, {
         channel: patchrightChannel,
         executablePath,
         headless,
@@ -189,41 +179,54 @@ export async function launch(options: McpLaunchOptions): Promise<BrowserResult> 
         ignoreDefaultArgs: options.noStealth ? undefined : HARMFUL_ARGS,
         ...contextOptions,
       });
-    } else {
-      // Launch without persistent context
-      browser = await chromium.launch({
-        channel: patchrightChannel,
-        executablePath,
-        headless,
-        args,
-        ignoreDefaultArgs: options.noStealth ? undefined : HARMFUL_ARGS,
-      });
-      context = await browser.newContext(contextOptions);
-      // Create initial page if none exists
-      if (context.pages().length === 0) {
-        await context.newPage();
+
+      return {browser: undefined, context};
+    } catch (error) {
+      if ((error as Error).message.includes('The browser is already running')) {
+        throw new Error(
+          `The browser is already running for ${options.userDataDir}. Use --isolated to run multiple browser instances.`,
+          {cause: error},
+        );
       }
+      throw error;
     }
-
-    if (options.initScript) {
-      await context.addInitScript({content: options.initScript});
-    }
-
-    return {browser, context};
-  } catch (error) {
-    if (
-      userDataDir &&
-      (error as Error).message.includes('The browser is already running')
-    ) {
-      throw new Error(
-        `The browser is already running for ${userDataDir}. Use --isolated to run multiple browser instances.`,
-        {
-          cause: error,
-        },
-      );
-    }
-    throw error;
   }
+
+  // Default: launch() + newContext() for clean isolated context.
+  // This provides much better anti-detection than launchPersistentContext
+  // because newContext() creates an incognito-like isolated context.
+  // Login state is preserved via storageState (cookies + localStorage).
+  const browser = await chromium.launch({
+    channel: patchrightChannel,
+    executablePath,
+    headless,
+    args,
+    ignoreDefaultArgs: options.noStealth ? undefined : HARMFUL_ARGS,
+  });
+
+  // Load saved state if available (non-isolated mode only)
+  let storageState: string | undefined;
+  if (!isolated) {
+    try {
+      await fs.promises.access(STATE_FILE);
+      storageState = STATE_FILE;
+      logger('Loading saved browser state from', STATE_FILE);
+    } catch {
+      logger('No saved browser state found, starting fresh');
+    }
+  }
+
+  const context = await browser.newContext({
+    ...contextOptions,
+    ...(storageState ? {storageState} : {}),
+  });
+
+  // Create initial page if none exists
+  if (context.pages().length === 0) {
+    await context.newPage();
+  }
+
+  return {browser, context};
 }
 
 export async function ensureBrowserLaunched(

@@ -591,7 +591,7 @@ export class McpResponse implements Response {
     }
 
     // In Playwright, there's no redirectChain() - use redirectedFrom() instead
-    const redirectChain: typeof httpRequest[] = [];
+    const redirectChain: Array<typeof httpRequest> = [];
     let current = httpRequest.redirectedFrom();
     while (current) {
       redirectChain.push(current);

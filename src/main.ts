@@ -6,8 +6,8 @@
 
 import './polyfill.js';
 
-import type {Channel} from './browser.js';
 import {ensureBrowserConnected, ensureBrowserLaunched} from './browser.js';
+import type {Channel} from './browser.js';
 import type {BrowserResult} from './browser.js';
 import {parseArguments} from './cli.js';
 import {features} from './features.js';

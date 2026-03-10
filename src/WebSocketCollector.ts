@@ -4,13 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type {Protocol} from 'devtools-protocol';
+
 import type {CdpSessionProvider} from './CdpSessionProvider.js';
 import type {RequestInitiator} from './PageCollector.js';
 import type {
   BrowserContext,
   Page,
 } from './third_party/index.js';
-import type {Protocol} from 'devtools-protocol';
 
 /**
  * WebSocket connection status.

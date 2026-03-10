@@ -1,3 +1,9 @@
+
+/**
+ * @license
+ * Copyright 2026 Google LLC
+ * SPDX-License-Identifier: Apache-2.0
+ */
 // Stealth patch — fixes detection vectors not covered by stealth.min.js
 (() => {
   // 1. Fix navigator.webdriver: should be false, not absent.

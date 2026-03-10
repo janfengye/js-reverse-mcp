@@ -14,12 +14,13 @@
   - [`get_websocket_messages`](#get_websocket_messages)
   - [`list_network_requests`](#list_network_requests)
   - [`list_websocket_connections`](#list_websocket_connections)
-- **[Debugging](#debugging)** (5 tools)
+- **[Debugging](#debugging)** (6 tools)
   - [`evaluate_script`](#evaluate_script)
   - [`get_console_message`](#get_console_message)
   - [`list_console_messages`](#list_console_messages)
+  - [`list_frames`](#list_frames)
+  - [`select_frame`](#select_frame)
   - [`take_screenshot`](#take_screenshot)
-  - [`take_snapshot`](#take_snapshot)
 - **[JS Reverse Engineering](#js-reverse-engineering)** (26 tools)
   - [`break_on_xhr`](#break_on_xhr)
   - [`evaluate_on_callframe`](#evaluate_on_callframe)
@@ -176,16 +177,16 @@ so returned values have to JSON-serializable.
 
 **Parameters:**
 
-- **args** (array) _(optional)_: An optional list of arguments to pass to the function.
 - **function** (string) **(required)**: A JavaScript function declaration to be executed by the tool in the currently selected page.
-  Example without arguments: `() => {
+Example without arguments: `() => {
   return document.title
 }` or `async () => {
   return await fetch("example.com")
 }`.
-  Example with arguments: `(el) => {
+Example with arguments: `(el) => {
   return el.innerText;
 }`
+
 
 ---
 
@@ -212,6 +213,24 @@ so returned values have to JSON-serializable.
 
 ---
 
+### `list_frames`
+
+**Description:** Lists all frames (including iframes) in the current page as a tree. Shows frame index, name, and URL. Use [`select_frame`](#select_frame) to switch execution context to a specific frame.
+
+**Parameters:** None
+
+---
+
+### `select_frame`
+
+**Description:** Selects a frame (by index from [`list_frames`](#list_frames)) as the execution context for [`evaluate_script`](#evaluate_script), [`hook_function`](#hook_function), [`inspect_object`](#inspect_object), and other tools that run JavaScript in the page.
+
+**Parameters:**
+
+- **frameIdx** (integer) **(required)**: The frame index (from [`list_frames`](#list_frames)). 0 = main frame.
+
+---
+
 ### `take_screenshot`
 
 **Description:** Take a screenshot of the page or element.
@@ -219,23 +238,9 @@ so returned values have to JSON-serializable.
 **Parameters:**
 
 - **filePath** (string) _(optional)_: The absolute path, or a path relative to the current working directory, to save the screenshot to instead of attaching it to the response.
-- **format** (enum: "png", "jpeg", "webp") _(optional)_: Type of format to save the screenshot as. Default is "png"
+- **format** (enum: "png", "jpeg") _(optional)_: Type of format to save the screenshot as. Default is "png"
 - **fullPage** (boolean) _(optional)_: If set to true takes a screenshot of the full page instead of the currently visible viewport. Incompatible with uid.
-- **quality** (number) _(optional)_: Compression quality for JPEG and WebP formats (0-100). Higher values mean better quality but larger file sizes. Ignored for PNG format.
-- **uid** (string) _(optional)_: The uid of an element on the page from the page content snapshot. If omitted takes a pages screenshot.
-
----
-
-### `take_snapshot`
-
-**Description:** Take a text snapshot of the currently selected page based on the a11y tree. The snapshot lists page elements along with a unique
-identifier (uid). Always use the latest snapshot. Prefer taking a snapshot over taking a screenshot. The snapshot indicates the element selected
-in the DevTools Elements panel (if any).
-
-**Parameters:**
-
-- **filePath** (string) _(optional)_: The absolute path, or a path relative to the current working directory, to save the snapshot to instead of attaching it to the response.
-- **verbose** (boolean) _(optional)_: Whether to include all possible information available in the full a11y tree. Default is false.
+- **quality** (number) _(optional)_: Compression quality for JPEG format (0-100). Higher values mean better quality but larger file sizes. Ignored for PNG format.
 
 ---
 

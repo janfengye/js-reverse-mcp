@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type {Protocol} from 'devtools-protocol';
+
 import type {
   AggregatedIssue,
   Common,
@@ -27,7 +29,6 @@ import type {
   HTTPRequest,
   Page,
 } from './third_party/index.js';
-import type {Protocol} from 'devtools-protocol';
 
 /**
  * Initiator information for a network request.

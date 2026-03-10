@@ -118,6 +118,10 @@ export class PageCollector<T> {
     this.#listenersInitializer = listeners;
   }
 
+  protected get context(): BrowserContext {
+    return this.#context;
+  }
+
   async init() {
     const pages = this.#context.pages();
     for (const page of pages) {
@@ -257,6 +261,7 @@ export class ConsoleCollector extends PageCollector<
   #sessionProvider: CdpSessionProvider;
   // Per-page issue collectors that feed into the PageCollector's storage
   #pageIssueCollectors = new WeakMap<Page, (issue: AggregatedIssue) => void>();
+  #cdpReady = false;
 
   constructor(
     context: BrowserContext,
@@ -279,6 +284,28 @@ export class ConsoleCollector extends PageCollector<
 
   override addPage(page: Page): void {
     super.addPage(page);
+    // Only set up CDP issue subscriber if CDP has been initialized
+    if (this.#cdpReady) {
+      this.#setupIssueSubscriber(page);
+    }
+  }
+
+  /**
+   * Initialize CDP-dependent features (Audits.enable for issue collection).
+   * Called lazily to avoid leaking CDP signals during navigation.
+   */
+  async initCdp(): Promise<void> {
+    if (this.#cdpReady) return;
+    this.#cdpReady = true;
+    // Set up issue subscribers for all already-tracked pages
+    for (const page of this.context.pages()) {
+      if (this.storage.has(page)) {
+        this.#setupIssueSubscriber(page);
+      }
+    }
+  }
+
+  #setupIssueSubscriber(page: Page): void {
     if (!features.issues) {
       return;
     }
@@ -431,6 +458,7 @@ export class NetworkCollector extends PageCollector<HTTPRequest> {
   #initiators = new WeakMap<Page, Map<string, RequestInitiator>>();
   #cdpListeners = new WeakMap<Page, () => void>();
   #sessionProvider: CdpSessionProvider;
+  #cdpReady = false;
 
   constructor(
     context: BrowserContext,
@@ -455,7 +483,25 @@ export class NetworkCollector extends PageCollector<HTTPRequest> {
 
   override addPage(page: Page): void {
     super.addPage(page);
-    void this.#setupInitiatorCollection(page);
+    // Only set up CDP initiator collection if CDP has been initialized
+    if (this.#cdpReady) {
+      void this.#setupInitiatorCollection(page);
+    }
+  }
+
+  /**
+   * Initialize CDP-dependent features (initiator collection).
+   * Called lazily to avoid leaking CDP signals during navigation.
+   */
+  async initCdp(): Promise<void> {
+    if (this.#cdpReady) return;
+    this.#cdpReady = true;
+    // Set up CDP initiator collection for all already-tracked pages
+    for (const page of this.context.pages()) {
+      if (this.storage.has(page)) {
+        void this.#setupInitiatorCollection(page);
+      }
+    }
   }
 
   async #setupInitiatorCollection(page: Page): Promise<void> {

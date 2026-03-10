@@ -152,7 +152,15 @@ export class McpContext implements Context {
     // Do NOT call it again here — double injection causes scripts to run twice
     // per page load, which can create detectable discrepancies.
 
-    // NOTE: CDP collectors are NOT initialized here.
+    // Initialize Playwright-level listeners early so that page load requests
+    // and console messages are captured immediately. These only register
+    // Node.js event listeners on Playwright objects — no extra CDP domains
+    // are activated, so anti-bot systems cannot detect them.
+    await this.#networkCollector.init();
+    await this.#consoleCollector.init();
+
+    // NOTE: CDP-heavy collectors (initiator collection, Audits.enable,
+    // WebSocket CDP events, Debugger.enable) are NOT initialized here.
     // They are lazily initialized on first tool use that needs them,
     // via ensureCollectorsInitialized(). This prevents CDP domain activation
     // from leaking automation signals during page navigation.
@@ -168,8 +176,11 @@ export class McpContext implements Context {
     if (this.#collectorsInitialized) return;
     this.#collectorsInitialized = true;
     this.logger('Initializing CDP collectors (deferred)');
-    await this.#networkCollector.init();
-    await this.#consoleCollector.init();
+    // Activate CDP-dependent features for network/console collectors
+    // that already have Playwright listeners running.
+    await this.#networkCollector.initCdp();
+    await this.#consoleCollector.initCdp();
+    // WebSocket collector is fully CDP-based, initialize it entirely here.
     await this.#webSocketCollector.init();
     await this.#initDebugger();
   }
@@ -278,11 +289,13 @@ export class McpContext implements Context {
     const page = await this.browserContext.newPage();
     await this.createPagesSnapshot();
     this.selectPage(page);
-    // Only add to collectors if they've been initialized.
-    // Otherwise the page will be picked up when ensureCollectorsInitialized() runs.
+    // Always add to network/console collectors — their Playwright listeners
+    // are active from startup. addPage() internally handles CDP setup if
+    // initCdp() has already been called.
+    this.#networkCollector.addPage(page);
+    this.#consoleCollector.addPage(page);
+    // WebSocket collector is fully CDP-based, only add if initialized.
     if (this.#collectorsInitialized) {
-      await this.#networkCollector.addPage(page);
-      await this.#consoleCollector.addPage(page);
       await this.#webSocketCollector.addPage(page);
     }
     return page;

@@ -23,26 +23,8 @@ export interface BrowserResult {
 
 let browserResult: BrowserResult | undefined;
 
-// State file for persisting cookies/localStorage across sessions.
-// Only used in launch() + newContext() mode (non-isolated, no userDataDir).
-const STATE_DIR = path.join(os.homedir(), '.cache', 'chrome-devtools-mcp');
-const STATE_FILE = path.join(STATE_DIR, 'state.json');
-
-/**
- * Persist browser context state (cookies + localStorage) to disk.
- * Call this after successful navigations to preserve login sessions.
- * Do NOT call after encountering anti-bot blocks to avoid saving poisoned state.
- */
-export async function persistBrowserState(): Promise<void> {
-  if (!browserResult?.context) return;
-  try {
-    await fs.promises.mkdir(STATE_DIR, {recursive: true});
-    await browserResult.context.storageState({path: STATE_FILE});
-    logger('Browser state persisted to', STATE_FILE);
-  } catch (error) {
-    logger('Failed to persist browser state:', error);
-  }
-}
+// Default persistent user data directory for login state, cookies, etc.
+const DEFAULT_USER_DATA_DIR = path.join(os.homedir(), '.cache', 'chrome-devtools-mcp', 'chrome-profile');
 
 export async function ensureBrowserConnected(options: {
   browserURL?: string;
@@ -167,66 +149,49 @@ export async function launch(options: McpLaunchOptions): Promise<BrowserResult> 
     ignoreHTTPSErrors: options.acceptInsecureCerts ?? true,
   };
 
-  // If user explicitly provides a userDataDir, use launchPersistentContext
-  // for full compatibility (IndexedDB, Cache Storage, Service Workers, etc.).
-  if (options.userDataDir) {
-    try {
-      const context = await chromium.launchPersistentContext(options.userDataDir, {
-        channel: patchrightChannel,
-        executablePath,
-        headless,
-        args,
-        ignoreDefaultArgs: options.noStealth ? undefined : HARMFUL_ARGS,
-        ...contextOptions,
-      });
+  // --isolated mode: launch() + newContext() for clean isolated context.
+  // Creates an incognito-like context with no persisted state.
+  if (isolated) {
+    const browser = await chromium.launch({
+      channel: patchrightChannel,
+      executablePath,
+      headless,
+      args,
+      ignoreDefaultArgs: options.noStealth ? undefined : HARMFUL_ARGS,
+    });
 
-      return {browser: undefined, context};
-    } catch (error) {
-      if ((error as Error).message.includes('The browser is already running')) {
-        throw new Error(
-          `The browser is already running for ${options.userDataDir}. Use --isolated to run multiple browser instances.`,
-          {cause: error},
-        );
-      }
-      throw error;
+    const context = await browser.newContext(contextOptions);
+
+    if (context.pages().length === 0) {
+      await context.newPage();
     }
+
+    return {browser, context};
   }
 
-  // Default: launch() + newContext() for clean isolated context.
-  // This provides much better anti-detection than launchPersistentContext
-  // because newContext() creates an incognito-like isolated context.
-  // Login state is preserved via storageState (cookies + localStorage).
-  const browser = await chromium.launch({
-    channel: patchrightChannel,
-    executablePath,
-    headless,
-    args,
-    ignoreDefaultArgs: options.noStealth ? undefined : HARMFUL_ARGS,
-  });
+  // Default: launchPersistentContext for full state persistence
+  // (cookies, IndexedDB, Cache Storage, Service Workers, localStorage).
+  const userDataDir = options.userDataDir ?? DEFAULT_USER_DATA_DIR;
+  try {
+    const context = await chromium.launchPersistentContext(userDataDir, {
+      channel: patchrightChannel,
+      executablePath,
+      headless,
+      args,
+      ignoreDefaultArgs: options.noStealth ? undefined : HARMFUL_ARGS,
+      ...contextOptions,
+    });
 
-  // Load saved state if available (non-isolated mode only)
-  let storageState: string | undefined;
-  if (!isolated) {
-    try {
-      await fs.promises.access(STATE_FILE);
-      storageState = STATE_FILE;
-      logger('Loading saved browser state from', STATE_FILE);
-    } catch {
-      logger('No saved browser state found, starting fresh');
+    return {browser: undefined, context};
+  } catch (error) {
+    if ((error as Error).message.includes('The browser is already running')) {
+      throw new Error(
+        `The browser is already running for ${userDataDir}. Use --isolated to run a separate browser instance.`,
+        {cause: error},
+      );
     }
+    throw error;
   }
-
-  const context = await browser.newContext({
-    ...contextOptions,
-    ...(storageState ? {storageState} : {}),
-  });
-
-  // Create initial page if none exists
-  if (context.pages().length === 0) {
-    await context.newPage();
-  }
-
-  return {browser, context};
 }
 
 export async function ensureBrowserLaunched(

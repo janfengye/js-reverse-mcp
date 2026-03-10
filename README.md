@@ -246,7 +246,6 @@ Hook fetch 函数，记录所有 API 调用的参数和返回值
 | `--blockWebrtc`        | 阻止 WebRTC 泄露真实 IP               | false   |
 | `--disableWebgl`       | 禁用 WebGL 防止 GPU 指纹              | false   |
 | `--noStealth`          | 禁用隐身启动参数（调试用）             | false   |
-| `--initScript`         | 自定义 JS 注入脚本路径                 | -       |
 | `--proxyServer`        | 代理服务器配置                         | -       |
 | `--logFile`            | 调试日志文件路径                       | -       |
 

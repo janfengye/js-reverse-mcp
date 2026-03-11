@@ -57,7 +57,7 @@
 
 ### `navigate_page`
 
-**Description:** Navigates the currently selected page to a URL, or performs back/forward/reload navigation. Waits for DOMContentLoaded event (not full page load). Default timeout is 10 seconds.
+**Description:** Navigates the currently selected page to a URL, or performs back/forward/reload navigation. Waits for DOMContentLoaded event (not full page load). Default timeout is 10 seconds. After navigation, the debugger is reinitialized: stale script IDs are cleared, and any previously set breakpoints are automatically restored.
 
 **Parameters:**
 
@@ -299,7 +299,7 @@ so returned values have to JSON-serializable. When execution is paused at a brea
 
 ### `get_script_source`
 
-**Description:** Gets the source code of a JavaScript script by its script ID. Supports line range (for normal files) or character offset (for minified single-line files). Use [`list_scripts`](#list_scripts) first to find the script ID.
+**Description:** Gets the source code of a JavaScript script by its script ID. Supports line range (for normal files) or character offset (for minified single-line files). Use [`list_scripts`](#list_scripts) first to find the script ID. After page navigation, old script IDs become invalid — call [`list_scripts`](#list_scripts) again to get fresh IDs.
 
 **Parameters:**
 
@@ -323,7 +323,7 @@ so returned values have to JSON-serializable. When execution is paused at a brea
 
 ### `list_breakpoints`
 
-**Description:** Lists all active breakpoints in the current debugging session.
+**Description:** Lists all active breakpoints in the current debugging session. Breakpoints persist across page navigations and are automatically restored after reload/goto/back/forward.
 
 **Parameters:** None
 
@@ -331,7 +331,7 @@ so returned values have to JSON-serializable. When execution is paused at a brea
 
 ### `list_scripts`
 
-**Description:** Lists all JavaScript scripts loaded in the current page. Returns script ID, URL, and source map information. Use this to find scripts before setting breakpoints or searching.
+**Description:** Lists all JavaScript scripts loaded in the current page. Returns script ID, URL, and source map information. Use this to find scripts before setting breakpoints or searching. Script IDs are automatically refreshed after page navigation, so listed IDs are always valid.
 
 **Parameters:**
 
@@ -402,7 +402,7 @@ so returned values have to JSON-serializable. When execution is paused at a brea
 - **caseSensitive** (boolean) _(optional)_: Whether the search should be case-sensitive.
 - **excludeMinified** (boolean) _(optional)_: Skip minified files (files with very long lines). Default: true.
 - **isRegex** (boolean) _(optional)_: Whether to treat the query as a regular expression.
-- **maxLineLength** (integer) _(optional)_: Maximum characters per line preview (default: 150). Set to 0 for full lines.
+- **maxLineLength** (integer) _(optional)_: Maximum characters per matched line preview (default: 150). Increase if you need more context around the match.
 - **maxResults** (integer) _(optional)_: Maximum number of results to return (default: 30).
 - **query** (string) **(required)**: The search query (string or regex pattern).
 - **urlFilter** (string) _(optional)_: Only search scripts whose URL contains this string (case-insensitive).
@@ -411,7 +411,7 @@ so returned values have to JSON-serializable. When execution is paused at a brea
 
 ### `set_breakpoint`
 
-**Description:** Sets a breakpoint in a JavaScript file at the specified line. The breakpoint will trigger when the code executes.
+**Description:** Sets a breakpoint in a JavaScript file at the specified line. The breakpoint will trigger when the code executes. Breakpoints persist across page navigations (reload/goto/back/forward) and are automatically restored.
 
 **Parameters:**
 
@@ -425,7 +425,7 @@ so returned values have to JSON-serializable. When execution is paused at a brea
 
 ### `set_breakpoint_on_text`
 
-**Description:** Sets a breakpoint on specific code (function name, statement, etc.) by searching for it and automatically determining the exact position. Works with both normal and minified files.
+**Description:** Sets a breakpoint on specific code (function name, statement, etc.) by searching for it and automatically determining the exact position. Works with both normal and minified files. Breakpoints persist across page navigations.
 
 **Parameters:**
 
@@ -462,7 +462,7 @@ so returned values have to JSON-serializable. When execution is paused at a brea
 
 ### `trace_function`
 
-**Description:** Traces calls to a function by its name in the source code. Works for ANY function including module-internal functions (webpack/rollup bundled). Uses "logpoints" (conditional breakpoints) to log arguments without pausing execution.
+**Description:** Traces calls to a function by its name in the source code. Works for ANY function including module-internal functions (webpack/rollup bundled). Uses "logpoints" (conditional breakpoints) to log arguments without pausing execution. Trace breakpoints persist across page navigations.
 
 **Parameters:**
 

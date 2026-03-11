@@ -26,6 +26,7 @@ export interface BreakpointInfo {
   lineNumber: number;
   columnNumber: number;
   condition?: string;
+  isRegex?: boolean;
   locations: Array<{
     scriptId: string;
     lineNumber: number;
@@ -559,6 +560,70 @@ export class DebuggerContext {
     return {query, matches};
   }
 
+  /**
+   * Clear cached scripts without disabling the debugger.
+   * Use during same-page navigation where the CDP session stays
+   * the same but old script IDs become invalid.
+   */
+  clearScripts(): void {
+    this.#scripts.clear();
+    this.#urlToScripts.clear();
+  }
+
+  /**
+   * Re-set all breakpoints from the stored definitions via CDP.
+   * Called after debugger re-enable to restore breakpoints that
+   * were wiped by Debugger.disable.
+   */
+  async restoreBreakpoints(
+    breakpoints: BreakpointInfo[],
+  ): Promise<void> {
+    if (!this.#client) {
+      return;
+    }
+
+    for (const bp of breakpoints) {
+      try {
+        const params: Record<string, unknown> = {
+          lineNumber: bp.lineNumber,
+          columnNumber: bp.columnNumber,
+        };
+        if (bp.isRegex) {
+          params.urlRegex = bp.url;
+        } else {
+          params.url = bp.url;
+        }
+        if (bp.condition) {
+          params.condition = bp.condition;
+        }
+
+        const result = await this.#client.send(
+          'Debugger.setBreakpointByUrl',
+          params,
+        );
+
+        const restoredInfo: BreakpointInfo = {
+          breakpointId: result.breakpointId,
+          url: bp.url,
+          lineNumber: bp.lineNumber,
+          columnNumber: bp.columnNumber,
+          condition: bp.condition,
+          isRegex: bp.isRegex,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          locations: result.locations.map((loc: any) => ({
+            scriptId: loc.scriptId,
+            lineNumber: loc.lineNumber,
+            columnNumber: loc.columnNumber ?? 0,
+          })),
+        };
+
+        this.#breakpoints.set(result.breakpointId, restoredInfo);
+      } catch {
+        // Skip breakpoints that fail to restore
+      }
+    }
+  }
+
   // ==================== Breakpoint Management ====================
 
   /**
@@ -642,6 +707,7 @@ export class DebuggerContext {
       lineNumber,
       columnNumber,
       condition,
+      isRegex: true,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       locations: result.locations.map((loc: any) => ({
         scriptId: loc.scriptId,

@@ -219,12 +219,21 @@ export class McpContext implements Context {
 
   /**
    * Reinitialize the debugger for the current page.
-   * Call this after selecting a new page.
+   * Clears stale script IDs, re-enables the debugger to receive fresh
+   * scriptParsed events, and restores any previously set breakpoints.
+   * Called after selecting a new page or after in-page navigation
+   * (goto/reload/back/forward).
    */
   async reinitDebugger(): Promise<void> {
     if (!this.#collectorsInitialized) return;
+    // Save breakpoint definitions before disable wipes them
+    const savedBreakpoints = this.#debuggerContext.getBreakpoints();
     await this.#debuggerContext.disable();
     await this.#initDebugger();
+    // Restore breakpoints after re-enabling the debugger
+    if (savedBreakpoints.length > 0) {
+      await this.#debuggerContext.restoreBreakpoints(savedBreakpoints);
+    }
   }
 
   /**

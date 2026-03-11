@@ -168,6 +168,13 @@ export type Context = Readonly<{
    * Also reinitializes the debugger for the main page's CDP session.
    */
   resetSelectedFrame(): void;
+  /**
+   * Reinitialize the debugger for the current page.
+   * Clears stale script IDs, re-enables the debugger to receive fresh
+   * scriptParsed events, and restores any previously set breakpoints.
+   * Called after page navigation (goto/reload/back/forward) or page switch.
+   */
+  reinitDebugger(): Promise<void>;
 }>;
 
 export function defineTool<Schema extends zod.ZodRawShape>(

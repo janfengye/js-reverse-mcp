@@ -25,7 +25,7 @@ import {defineTool} from './ToolDefinition.js';
 export const listScripts = defineTool({
   name: 'list_scripts',
   description:
-    'Lists all JavaScript scripts loaded in the current page. Returns script ID, URL, and source map information. Use this to find scripts before setting breakpoints or searching.',
+    'Lists all JavaScript scripts loaded in the current page. Returns script ID, URL, and source map information. Use this to find scripts before setting breakpoints or searching. Script IDs are automatically refreshed after page navigation, so listed IDs are always valid.',
   annotations: {
     title: 'List Scripts',
     category: ToolCategory.REVERSE_ENGINEERING,
@@ -85,7 +85,7 @@ export const listScripts = defineTool({
 export const getScriptSource = defineTool({
   name: 'get_script_source',
   description:
-    'Gets the source code of a JavaScript script by its script ID. Supports line range (for normal files) or character offset (for minified single-line files). Use list_scripts first to find the script ID.',
+    'Gets the source code of a JavaScript script by its script ID. Supports line range (for normal files) or character offset (for minified single-line files). Use list_scripts first to find the script ID. After page navigation, old script IDs become invalid — call list_scripts again to get fresh IDs.',
   annotations: {
     title: 'Get Script Source',
     category: ToolCategory.REVERSE_ENGINEERING,
@@ -547,7 +547,7 @@ export const searchInSources = defineTool({
 export const setBreakpoint = defineTool({
   name: 'set_breakpoint',
   description:
-    'Sets a breakpoint in a JavaScript file at the specified line. The breakpoint will trigger when the code executes.',
+    'Sets a breakpoint in a JavaScript file at the specified line. The breakpoint will trigger when the code executes. Breakpoints persist across page navigations (reload/goto/back/forward) and are automatically restored.',
   annotations: {
     title: 'Set Breakpoint',
     category: ToolCategory.REVERSE_ENGINEERING,
@@ -718,7 +718,7 @@ export const removeAllBreakpoints = defineTool({
  */
 export const listBreakpoints = defineTool({
   name: 'list_breakpoints',
-  description: 'Lists all active breakpoints in the current debugging session.',
+  description: 'Lists all active breakpoints in the current debugging session. Breakpoints persist across page navigations and are automatically restored after reload/goto/back/forward.',
   annotations: {
     title: 'List Breakpoints',
     category: ToolCategory.REVERSE_ENGINEERING,
@@ -1280,7 +1280,7 @@ export const evaluateOnCallframe = defineTool({
 export const setBreakpointOnText = defineTool({
   name: 'set_breakpoint_on_text',
   description:
-    'Sets a breakpoint on specific code (function name, statement, etc.) by searching for it and automatically determining the exact position. Works with both normal and minified files.',
+    'Sets a breakpoint on specific code (function name, statement, etc.) by searching for it and automatically determining the exact position. Works with both normal and minified files. Breakpoints persist across page navigations.',
   annotations: {
     title: 'Set Breakpoint on Text',
     category: ToolCategory.REVERSE_ENGINEERING,
@@ -1528,7 +1528,7 @@ export const removeXhrBreakpoint = defineTool({
 export const traceFunction = defineTool({
   name: 'trace_function',
   description:
-    'Traces calls to a function by its name in the source code. Works for ANY function including module-internal functions (webpack/rollup bundled). Uses "logpoints" (conditional breakpoints) to log arguments without pausing execution.',
+    'Traces calls to a function by its name in the source code. Works for ANY function including module-internal functions (webpack/rollup bundled). Uses "logpoints" (conditional breakpoints) to log arguments without pausing execution. Trace breakpoints persist across page navigations.',
   annotations: {
     title: 'Trace Function',
     category: ToolCategory.REVERSE_ENGINEERING,

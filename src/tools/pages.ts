@@ -80,7 +80,7 @@ export const newPage = defineTool({
 
 export const navigatePage = defineTool({
   name: 'navigate_page',
-  description: `Navigates the currently selected page to a URL, or performs back/forward/reload navigation. Waits for DOMContentLoaded event (not full page load). Default timeout is 10 seconds.`,
+  description: `Navigates the currently selected page to a URL, or performs back/forward/reload navigation. Waits for DOMContentLoaded event (not full page load). Default timeout is 10 seconds. After navigation, the debugger is reinitialized: stale script IDs are cleared, and any previously set breakpoints are automatically restored.`,
   annotations: {
     category: ToolCategory.NAVIGATION,
     readOnlyHint: false,
@@ -127,6 +127,7 @@ export const navigatePage = defineTool({
             waitUntil: 'domcontentloaded',
             referer: DEFAULT_REFERER,
           });
+          await context.reinitDebugger();
           response.appendResponseLine(
             `Successfully navigated to ${request.params.url}.`,
           );
@@ -142,6 +143,7 @@ export const navigatePage = defineTool({
             ...options,
             waitUntil: 'domcontentloaded',
           });
+          await context.reinitDebugger();
           response.appendResponseLine(
             `Successfully navigated back to ${page.url()}.`,
           );
@@ -157,6 +159,7 @@ export const navigatePage = defineTool({
             ...options,
             waitUntil: 'domcontentloaded',
           });
+          await context.reinitDebugger();
           response.appendResponseLine(
             `Successfully navigated forward to ${page.url()}.`,
           );
@@ -180,6 +183,7 @@ export const navigatePage = defineTool({
               waitUntil: 'domcontentloaded',
             });
           }
+          await context.reinitDebugger();
           response.appendResponseLine(`Successfully reloaded the page.`);
         } catch (error) {
           response.appendResponseLine(

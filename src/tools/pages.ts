@@ -113,6 +113,17 @@ export const navigatePage = defineTool({
       request.params.type = 'url';
     }
 
+    // Auto-resume if execution is paused at a breakpoint before navigating,
+    // otherwise the navigation will hang waiting for the paused script.
+    const debugger_ = context.debuggerContext;
+    if (debugger_.isEnabled() && debugger_.isPaused()) {
+      try {
+        await debugger_.resume();
+      } catch {
+        // Ignore resume errors
+      }
+    }
+
     // Use plain navigation without waitForEventsAfterAction to avoid creating
     // a CDP session during navigation. Anti-bot systems detect the extra
     // CDP session that WaitForHelper creates (Page.frameStartedNavigating listener).
@@ -132,9 +143,18 @@ export const navigatePage = defineTool({
             `Successfully navigated to ${request.params.url}.`,
           );
         } catch (error) {
-          response.appendResponseLine(
-            `Unable to navigate in the  selected page: ${error.message}.`,
-          );
+          // Reinitialize debugger even on timeout — old scripts are already
+          // invalid and breakpoints need restoring for the new document.
+          await context.reinitDebugger();
+          if (debugger_.isPaused()) {
+            response.appendResponseLine(
+              `Navigation to ${request.params.url} started but execution is paused at a breakpoint. Use get_paused_info to inspect, then resume to continue loading.`,
+            );
+          } else {
+            response.appendResponseLine(
+              `Unable to navigate in the selected page: ${error.message}.`,
+            );
+          }
         }
         break;
       case 'back':
@@ -148,9 +168,16 @@ export const navigatePage = defineTool({
             `Successfully navigated back to ${page.url()}.`,
           );
         } catch (error) {
-          response.appendResponseLine(
-            `Unable to navigate back in the selected page: ${error.message}.`,
-          );
+          await context.reinitDebugger();
+          if (debugger_.isPaused()) {
+            response.appendResponseLine(
+              `Navigation back started but execution is paused at a breakpoint. Use get_paused_info to inspect, then resume to continue loading.`,
+            );
+          } else {
+            response.appendResponseLine(
+              `Unable to navigate back in the selected page: ${error.message}.`,
+            );
+          }
         }
         break;
       case 'forward':
@@ -164,9 +191,16 @@ export const navigatePage = defineTool({
             `Successfully navigated forward to ${page.url()}.`,
           );
         } catch (error) {
-          response.appendResponseLine(
-            `Unable to navigate forward in the selected page: ${error.message}.`,
-          );
+          await context.reinitDebugger();
+          if (debugger_.isPaused()) {
+            response.appendResponseLine(
+              `Navigation forward started but execution is paused at a breakpoint. Use get_paused_info to inspect, then resume to continue loading.`,
+            );
+          } else {
+            response.appendResponseLine(
+              `Unable to navigate forward in the selected page: ${error.message}.`,
+            );
+          }
         }
         break;
       case 'reload':
@@ -186,9 +220,16 @@ export const navigatePage = defineTool({
           await context.reinitDebugger();
           response.appendResponseLine(`Successfully reloaded the page.`);
         } catch (error) {
-          response.appendResponseLine(
-            `Unable to reload the selected page: ${error.message}.`,
-          );
+          await context.reinitDebugger();
+          if (debugger_.isPaused()) {
+            response.appendResponseLine(
+              `Page reload started but execution is paused at a breakpoint. Use get_paused_info to inspect, then resume to continue loading.`,
+            );
+          } else {
+            response.appendResponseLine(
+              `Unable to reload the selected page: ${error.message}.`,
+            );
+          }
         }
         break;
     }

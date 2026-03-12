@@ -47,6 +47,15 @@ Example with arguments: \`(el) => {
 }\`
 `,
     ),
+    mainWorld: zod
+      .boolean()
+      .optional()
+      .default(false)
+      .describe(
+        'Execute the function in the page main world instead of the default isolated context. ' +
+          'Use this when you need to access page-defined globals (e.g. window.bdms, window.app). ' +
+          'The function must be synchronous and return a JSON-serializable value.',
+      ),
   },
   handler: async (request, response, context) => {
     // When paused at a breakpoint, evaluate in the paused call frame context
@@ -79,6 +88,67 @@ Example with arguments: \`(el) => {
         response.appendResponseLine('```');
         return;
       }
+    }
+
+    if (request.params.mainWorld) {
+      // Main world execution via script tag injection + DOM bridge.
+      //
+      // Why: Patchright (our browser automation library) deliberately runs
+      // frame.evaluate() in an isolated ExecutionContext by default. This is
+      // its core anti-detection mechanism — it avoids calling CDP
+      // Runtime.enable, which all major anti-bot systems (Cloudflare,
+      // DataDome, ByteDance bdms, etc.) can detect.
+      //
+      // The trade-off is that isolated contexts cannot access page-defined
+      // globals like window.bdms or window.app. To work around this without
+      // breaking stealth, we inject a <script> tag (which always executes in
+      // the main world) and pass the result back via a DOM attribute (the DOM
+      // is shared between worlds).
+      const frame = context.getSelectedFrame();
+      const bridgeId = `__mcp_bridge_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      const result = await withTimeout(
+        frame.evaluate(async ({fn, id}) => {
+          const el = document.createElement('div');
+          el.id = id;
+          el.style.display = 'none';
+          document.documentElement.appendChild(el);
+
+          const script = document.createElement('script');
+          script.textContent = `
+            (function() {
+              var el = document.getElementById(${JSON.stringify(id)});
+              try {
+                var result = (${fn})();
+                el.setAttribute('data-result', JSON.stringify(result));
+              } catch(e) {
+                el.setAttribute('data-error', e.message || String(e));
+              }
+            })();
+          `;
+          document.documentElement.appendChild(script);
+          script.remove();
+
+          // Read result from the DOM bridge
+          const data = el.getAttribute('data-result');
+          const error = el.getAttribute('data-error');
+          el.remove();
+
+          if (error) {
+            throw new Error(error);
+          }
+          return data ?? 'undefined';
+        }, {fn: request.params.function, id: bridgeId}),
+        DEFAULT_SCRIPT_TIMEOUT,
+        'Script evaluation timed out',
+      );
+
+      response.appendResponseLine(
+        'Script ran on page (main world) and returned:',
+      );
+      response.appendResponseLine('```json');
+      response.appendResponseLine(`${result}`);
+      response.appendResponseLine('```');
+      return;
     }
 
     let fn: JSHandle<unknown> | undefined;

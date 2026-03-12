@@ -180,6 +180,8 @@ so returned values have to JSON-serializable. When execution is paused at a brea
   return el.innerText;
 }`
 
+- **mainWorld** (boolean) _(optional)_: Execute the function in the page main world instead of the default isolated context. Use this when you need to access page-defined globals (e.g. window.bdms, window.app). The function must be synchronous and return a JSON-serializable value.
+
 ---
 
 ### `get_console_message`

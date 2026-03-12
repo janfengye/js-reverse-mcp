@@ -414,7 +414,6 @@ export class DebuggerContext {
     options: {
       returnByValue?: boolean;
       generatePreview?: boolean;
-      awaitPromise?: boolean;
     } = {},
   ): Promise<EvaluateResult> {
     if (!this.#client) {
@@ -429,9 +428,6 @@ export class DebuggerContext {
       expression,
       returnByValue: options.returnByValue ?? false,
       generatePreview: options.generatePreview ?? true,
-      ...(options.awaitPromise !== undefined && {
-        awaitPromise: options.awaitPromise,
-      }),
     });
 
     return {

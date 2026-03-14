@@ -61,6 +61,12 @@ export const listNetworkRequests = defineTool({
       .describe(
         'Filter requests to only return requests of the specified resource types. When omitted or empty, returns all requests.',
       ),
+    urlFilter: zod
+      .string()
+      .optional()
+      .describe(
+        'Filter requests by URL. Only requests containing this substring will be returned.',
+      ),
     includePreservedRequests: zod
       .boolean()
       .default(false)
@@ -78,6 +84,7 @@ export const listNetworkRequests = defineTool({
       pageSize: request.params.pageSize,
       pageIdx: request.params.pageIdx,
       resourceTypes: request.params.resourceTypes,
+      urlFilter: request.params.urlFilter,
       includePreservedRequests: request.params.includePreservedRequests,
       networkRequestIdInDevToolsUI: reqid,
     });

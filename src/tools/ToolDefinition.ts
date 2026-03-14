@@ -57,6 +57,7 @@ export interface Response {
     value: boolean,
     options?: PaginationOptions & {
       resourceTypes?: string[];
+      urlFilter?: string;
       includePreservedRequests?: boolean;
       networkRequestIdInDevToolsUI?: number;
     },

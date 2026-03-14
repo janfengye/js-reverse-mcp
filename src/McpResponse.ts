@@ -43,6 +43,7 @@ export class McpResponse implements Response {
     include: boolean;
     pagination?: PaginationOptions;
     resourceTypes?: string[];
+    urlFilter?: string;
     includePreservedRequests?: boolean;
     networkRequestIdInDevToolsUI?: number;
   };
@@ -68,6 +69,7 @@ export class McpResponse implements Response {
     value: boolean,
     options?: PaginationOptions & {
       resourceTypes?: string[];
+      urlFilter?: string;
       includePreservedRequests?: boolean;
       networkRequestIdInDevToolsUI?: number;
     },
@@ -87,6 +89,7 @@ export class McpResponse implements Response {
             }
           : undefined,
       resourceTypes: options?.resourceTypes,
+      urlFilter: options?.urlFilter,
       includePreservedRequests: options?.includePreservedRequests,
       networkRequestIdInDevToolsUI: options?.networkRequestIdInDevToolsUI,
     };
@@ -411,6 +414,15 @@ export class McpResponse implements Response {
           const type = request.resourceType();
           return normalizedTypes.has(type);
         });
+      }
+
+      // Apply URL filter if specified
+      if (this.#networkRequestsOptions.urlFilter) {
+        const filterPattern =
+          this.#networkRequestsOptions.urlFilter.toLowerCase();
+        requests = requests.filter(r =>
+          r.url().toLowerCase().includes(filterPattern),
+        );
       }
 
       // Show newest requests first

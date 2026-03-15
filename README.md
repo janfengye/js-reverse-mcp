@@ -21,25 +21,48 @@ Built on the [Patchright](https://github.com/nicecaesar/patchright) anti-detecti
 
 - [Node.js](https://nodejs.org/) v20.19 or later
 - [Chrome](https://www.google.com/chrome/) stable
-- Git
 
-## Local Installation
+## Quick Start (npx)
+
+No installation required. Add to your MCP client configuration:
+
+```json
+{
+  "mcpServers": {
+    "js-reverse": {
+      "command": "npx",
+      "args": ["js-reverse-mcp"]
+    }
+  }
+}
+```
+
+### Claude Code
 
 ```bash
-# Clone the repository
+claude mcp add js-reverse npx js-reverse-mcp
+```
+
+### Cursor
+
+Go to `Cursor Settings` -> `MCP` -> `New MCP Server`, and use the configuration above.
+
+### VS Code Copilot
+
+```bash
+code --add-mcp '{"name":"js-reverse","command":"npx","args":["js-reverse-mcp"]}'
+```
+
+## Local Installation (Alternative)
+
+```bash
 git clone https://github.com/nicecaesar/js-reverse-mcp.git
 cd js-reverse-mcp
-
-# Install dependencies
 npm install
-
-# Build the project
 npm run build
 ```
 
-## MCP Client Configuration
-
-Add the following to your MCP client configuration file:
+Then use local path in your MCP configuration:
 
 ```json
 {
@@ -50,22 +73,6 @@ Add the following to your MCP client configuration file:
     }
   }
 }
-```
-
-### Claude Code
-
-```bash
-claude mcp add js-reverse node /path/to/js-reverse-mcp/build/src/index.js
-```
-
-### Cursor
-
-Go to `Cursor Settings` -> `MCP` -> `New MCP Server`, and use the configuration above.
-
-### VS Code Copilot
-
-```bash
-code --add-mcp '{"name":"js-reverse","command":"node","args":["/path/to/js-reverse-mcp/build/src/index.js"]}'
 ```
 
 ## Anti-Detection
@@ -225,32 +232,15 @@ List WebSocket connections, analyze message patterns, view messages of specific 
 
 ### Example Configurations
 
-**Basic usage (recommended):**
-
-```json
-{
-  "mcpServers": {
-    "js-reverse": {
-      "command": "node",
-      "args": [
-        "/path/to/js-reverse-mcp/build/src/index.js",
-        "--headless=false"
-      ]
-    }
-  }
-}
-```
-
 **Enhanced anti-detection (Canvas noise + WebRTC blocking):**
 
 ```json
 {
   "mcpServers": {
     "js-reverse": {
-      "command": "node",
+      "command": "npx",
       "args": [
-        "/path/to/js-reverse-mcp/build/src/index.js",
-        "--headless=false",
+        "js-reverse-mcp",
         "--hideCanvas",
         "--blockWebrtc"
       ]
@@ -265,10 +255,9 @@ List WebSocket connections, analyze message patterns, view messages of specific 
 {
   "mcpServers": {
     "js-reverse": {
-      "command": "node",
+      "command": "npx",
       "args": [
-        "/path/to/js-reverse-mcp/build/src/index.js",
-        "--headless=false",
+        "js-reverse-mcp",
         "--isolated"
       ]
     }
@@ -298,9 +287,9 @@ List WebSocket connections, analyze message patterns, view messages of specific 
 {
   "mcpServers": {
     "js-reverse": {
-      "command": "node",
+      "command": "npx",
       "args": [
-        "/path/to/js-reverse-mcp/build/src/index.js",
+        "js-reverse-mcp",
         "--browser-url=http://127.0.0.1:9222"
       ]
     }

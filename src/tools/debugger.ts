@@ -811,7 +811,21 @@ export const getPausedInfo = defineTool({
       .int()
       .optional()
       .default(2)
-      .describe('Maximum scope depth to traverse (default: 2).'),
+      .describe(
+        'Maximum scope depth to traverse (default: 2). ' +
+          '1 = local scope only (function args & local vars), ' +
+          '2 = local + closure scopes, ' +
+          '3+ = all non-global scopes.',
+      ),
+    frameIndex: zod
+      .number()
+      .int()
+      .optional()
+      .default(0)
+      .describe(
+        'Which call frame to inspect scope variables for (0 = top frame). ' +
+          'Use the call stack indices to pick a frame.',
+      ),
   },
   handler: async (request, response, context) => {
     const debugger_ = context.debuggerContext;
@@ -856,52 +870,83 @@ export const getPausedInfo = defineTool({
       response.appendResponseLine(
         `  ${i}. ${frame.functionName} @ ${location}`,
       );
-      response.appendResponseLine(`     CallFrameId: ${frame.callFrameId}`);
     }
 
     // Include scope variables if requested
     if (request.params.includeScopes && pausedState.callFrames.length > 0) {
-      response.appendResponseLine('\n🔍 Scope Variables (top frame):');
+      const frameIndex = request.params.frameIndex;
+      if (frameIndex < 0 || frameIndex >= pausedState.callFrames.length) {
+        response.appendResponseLine(
+          `\n⚠️ frameIndex ${frameIndex} is out of range (0-${pausedState.callFrames.length - 1}).`,
+        );
+      } else {
+        const selectedFrame = pausedState.callFrames[frameIndex];
+        response.appendResponseLine(
+          `\n🔍 Scope Variables (frame ${frameIndex}: ${selectedFrame.functionName || '<anonymous>'}):`,
+        );
 
-      const topFrame = pausedState.callFrames[0];
+        const maxDepth = request.params.maxScopeDepth;
+        // Scope priority: local(1) > closure(2) > block/catch/with/etc(3+)
+        // Always skip global scope
+        const scopePriority: Record<string, number> = {
+          local: 1,
+          closure: 2,
+        };
+        let scopeCount = 0;
 
-      for (const scope of topFrame.scopeChain) {
-        // Only show local and closure scopes, skip global
-        if (scope.type === 'global') {
-          continue;
+        for (const scope of selectedFrame.scopeChain) {
+          if (scope.type === 'global') {
+            continue;
+          }
+
+          const priority = scopePriority[scope.type] ?? 3;
+          if (priority > maxDepth) {
+            continue;
+          }
+          scopeCount++;
+
+          const scopeName = scope.name || scope.type;
+          response.appendResponseLine(`\n  [${scopeName}]:`);
+
+          if (scope.object.objectId) {
+            try {
+              const variables = await debugger_.getScopeVariables(
+                scope.object.objectId,
+              );
+
+              if (variables.length === 0) {
+                response.appendResponseLine('    (empty)');
+              } else {
+                for (const variable of variables.slice(0, 20)) {
+                  let valueStr =
+                    typeof variable.value === 'string'
+                      ? `"${variable.value}"`
+                      : JSON.stringify(variable.value);
+                  if (valueStr && valueStr.length > 200) {
+                    valueStr = valueStr.slice(0, 200) + '...(truncated)';
+                  }
+                  response.appendResponseLine(
+                    `    ${variable.name}: ${valueStr}`,
+                  );
+                }
+                if (variables.length > 20) {
+                  response.appendResponseLine(
+                    `    ... and ${variables.length - 20} more`,
+                  );
+                }
+              }
+            } catch {
+              response.appendResponseLine(
+                '    (unable to retrieve variables)',
+              );
+            }
+          }
         }
 
-        const scopeName = scope.name || scope.type;
-        response.appendResponseLine(`\n  [${scopeName}]:`);
-
-        if (scope.object.objectId) {
-          try {
-            const variables = await debugger_.getScopeVariables(
-              scope.object.objectId,
-            );
-
-            if (variables.length === 0) {
-              response.appendResponseLine('    (empty)');
-            } else {
-              for (const variable of variables.slice(0, 20)) {
-                // Limit to 20 variables
-                const valueStr =
-                  typeof variable.value === 'string'
-                    ? `"${variable.value}"`
-                    : JSON.stringify(variable.value);
-                response.appendResponseLine(
-                  `    ${variable.name}: ${valueStr}`,
-                );
-              }
-              if (variables.length > 20) {
-                response.appendResponseLine(
-                  `    ... and ${variables.length - 20} more`,
-                );
-              }
-            }
-          } catch {
-            response.appendResponseLine('    (unable to retrieve variables)');
-          }
+        if (scopeCount === 0) {
+          response.appendResponseLine(
+            '    (no matching scopes — try increasing maxScopeDepth)',
+          );
         }
       }
     }

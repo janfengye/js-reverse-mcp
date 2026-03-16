@@ -111,6 +111,7 @@ so returned values have to JSON-serializable. When execution is paused at a brea
 
 **Parameters:**
 
+- **frameIndex** (integer) _(optional)_: When paused at a breakpoint, which call frame to evaluate in (0 = top frame). If omitted, uses the top frame. Use [`get_paused_info`](#get_paused_info) to see available frames.
 - **function** (string) **(required)**: A JavaScript function declaration to be executed by the tool in the currently selected page.
   Example without arguments: `() => {
   return document.title
@@ -180,8 +181,9 @@ so returned values have to JSON-serializable. When execution is paused at a brea
 
 **Parameters:**
 
+- **frameIndex** (integer) _(optional)_: Which call frame to inspect scope variables for (0 = top frame). Use the call stack indices to pick a frame.
 - **includeScopes** (boolean) _(optional)_: Whether to include scope variables (default: true).
-- **maxScopeDepth** (integer) _(optional)_: Maximum scope depth to traverse (default: 2).
+- **maxScopeDepth** (integer) _(optional)_: Maximum scope depth to traverse (default: 2). 1 = local scope only (function args &amp; local vars), 2 = local + closure scopes, 3+ = all non-global scopes.
 
 ---
 

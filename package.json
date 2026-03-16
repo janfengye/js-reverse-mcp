@@ -1,6 +1,6 @@
 {
   "name": "js-reverse-mcp",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "JS reverse engineering MCP server with agent-first tool design and built-in anti-detection. 为 AI Agent 设计的 JS 逆向 MCP Server，内置反检测。",
   "keywords": [
     "mcp",
@@ -73,7 +73,6 @@
     "@typescript-eslint/eslint-plugin": "^8.43.0",
     "@typescript-eslint/parser": "^8.43.0",
     "chrome-devtools-frontend": "1.0.1547571",
-    "core-js": "3.47.0",
     "debug": "4.4.3",
     "eslint": "^9.35.0",
     "eslint-import-resolver-typescript": "^4.4.4",
@@ -89,6 +88,9 @@
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.43.0",
     "yargs": "18.0.0"
+  },
+  "dependencies": {
+    "core-js": "3.47.0"
   },
   "engines": {
     "node": "^20.19.0 || ^22.12.0 || >=23"

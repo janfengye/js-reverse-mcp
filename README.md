@@ -43,6 +43,12 @@ No installation required. Add to your MCP client configuration:
 claude mcp add js-reverse npx js-reverse-mcp
 ```
 
+### Codex
+
+```bash
+codex mcp add js-reverse -- npx js-reverse-mcp
+```
+
 ### Cursor
 
 Go to `Cursor Settings` -> `MCP` -> `New MCP Server`, and use the configuration above.

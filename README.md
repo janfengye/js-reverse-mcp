@@ -62,7 +62,7 @@ code --add-mcp '{"name":"js-reverse","command":"npx","args":["js-reverse-mcp"]}'
 ## Local Installation (Alternative)
 
 ```bash
-git clone https://github.com/nicecaesar/js-reverse-mcp.git
+git clone https://github.com/zhizhuodemao/js-reverse-mcp.git
 cd js-reverse-mcp
 npm install
 npm run build
@@ -114,7 +114,7 @@ js-reverse-mcp includes multi-layered anti-detection measures to work on sites w
 | ------------------- | -------------------------------------------------------------- |
 | `list_scripts`      | List all JavaScript scripts loaded in the page                 |
 | `get_script_source` | Get script source snippet by line range or character offset    |
-| `save_script_source`| Save full script source to a local file (for large/minified files) |
+| `save_script_source`| Save full script source to a local file (for large/minified/WASM files) |
 | `search_in_sources` | Search for strings or regex patterns across all scripts        |
 
 ### Breakpoint & Execution Control
@@ -148,7 +148,7 @@ js-reverse-mcp includes multi-layered anti-detection measures to work on sites w
 
 | Tool                    | Description                                    |
 | ----------------------- | ---------------------------------------------- |
-| `evaluate_script`       | Execute JavaScript in the page (supports paused context and main world) |
+| `evaluate_script`       | Execute JavaScript in the page (supports paused context, main world, and saving results/binary data to file) |
 | `list_console_messages` | List console messages, or get one by msgid     |
 
 ## Usage Examples

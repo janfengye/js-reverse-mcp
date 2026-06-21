@@ -6,13 +6,49 @@
 
 import {isUtf8} from 'node:buffer';
 
+import {networkRequestObservedAtSymbol} from '../PageCollector.js';
 import type {HTTPRequest, HTTPResponse} from '../third_party/index.js';
 
-const BODY_CONTEXT_SIZE_LIMIT = 10000;
+const BODY_CONTEXT_SIZE_LIMIT = 4096;
 const BODY_FETCH_TIMEOUT_MS = 5000;
+const FORM_FIELD_PREVIEW_LIMIT = 20;
+const HEADER_CONTEXT_SIZE_LIMIT = 4096;
+const LIST_SET_COOKIE_NAME_LIMIT = 5;
+const LIST_URL_CONTEXT_LIMIT = 240;
 const LONG_URL_LIMIT = 2000;
 const LONG_QUERY_LIMIT = 1000;
-const LARGE_REQUEST_BODY_LIMIT = 8192;
+const SET_COOKIE_CONTEXT_SIZE_LIMIT = 1024;
+const COOKIE_HEADER_NAME_LIMIT = 10;
+
+const SENSITIVE_HEADER_EXACT_NAMES = new Set([
+  'authorization',
+  'cookie',
+  'proxy-authorization',
+  'x-api-key',
+]);
+
+const SENSITIVE_HEADER_NAME_FRAGMENTS = [
+  'token',
+  'secret',
+  'password',
+  'api-key',
+  'apikey',
+  'session',
+  'csrf',
+  'xsrf',
+];
+
+type RequestTiming = ReturnType<HTTPRequest['timing']>;
+type TimingSource = 'browser' | 'observed';
+
+interface RequestWithObservedAt extends HTTPRequest {
+  [networkRequestObservedAtSymbol]?: number;
+}
+
+interface RequestStartTiming {
+  epochMs: number;
+  source: TimingSource;
+}
 
 export type NetworkExportPart =
   | 'all'
@@ -30,6 +66,12 @@ interface QueryPayload {
 export interface HeaderEntry {
   name: string;
   value: string;
+}
+
+interface HeaderFormatOptions {
+  sizeLimit?: number;
+  omittedLabel?: string;
+  redactSensitiveValues?: boolean;
 }
 
 type BodySnapshot =
@@ -75,7 +117,7 @@ export function getShortDescriptionForRequest(
   id: number,
   selectedInDevToolsUI = false,
 ): string {
-  return `reqid=${id} [${request.resourceType()}] ${request.method()} ${request.url()} ${getStatusFromRequest(request)}${selectedInDevToolsUI ? ` [selected in the DevTools Network panel]` : ''}`;
+  return `reqid=${id} ${getFormattedRequestTimingBrief(request)} [${request.resourceType()}] ${request.method()} ${getUrlForList(request.url())} ${getStatusFromRequest(request)}${selectedInDevToolsUI ? ` [selected in the DevTools Network panel]` : ''}`;
 }
 
 export async function getShortDescriptionForRequestAsync(
@@ -84,12 +126,71 @@ export async function getShortDescriptionForRequestAsync(
   selectedInDevToolsUI = false,
   includeSetCookieMarker = false,
 ): Promise<string> {
+  if (!hasFinishedOrFailed(request)) {
+    return getShortDescriptionForRequest(request, id, selectedInDevToolsUI);
+  }
+
   const status = await getStatusFromRequestAsync(request);
-  const setCookieMarker =
-    includeSetCookieMarker && (await requestHasSetCookie(request))
-      ? ' [set-cookie]'
-      : '';
-  return `reqid=${id} [${request.resourceType()}] ${request.method()} ${request.url()} ${status}${setCookieMarker}${selectedInDevToolsUI ? ` [selected in the DevTools Network panel]` : ''}`;
+  const setCookieMarker = includeSetCookieMarker
+    ? await getSetCookieListMarker(request)
+    : '';
+  return `reqid=${id} ${getFormattedRequestTimingBrief(request)} [${request.resourceType()}] ${request.method()} ${getUrlForList(request.url())} ${status}${setCookieMarker}${selectedInDevToolsUI ? ` [selected in the DevTools Network panel]` : ''}`;
+}
+
+function hasFinishedOrFailed(request: HTTPRequest): boolean {
+  if (request.failure()) {
+    return true;
+  }
+
+  return isAvailableTiming(request.timing().responseEnd);
+}
+
+export function getFormattedRequestTimingBrief(request: HTTPRequest): string {
+  const timing = request.timing();
+  const start = getRequestStartTiming(request, timing);
+  const startText = start
+    ? `${start.source === 'observed' ? 'observed ' : ''}${formatLocalTimestamp(start.epochMs)}`
+    : 'time unavailable';
+  const durationText = isAvailableTiming(timing.responseEnd)
+    ? formatDuration(timing.responseEnd)
+    : 'pending';
+  return `[${startText}, ${durationText}]`;
+}
+
+export function getFormattedRequestTiming(request: HTTPRequest): string[] {
+  const timing = request.timing();
+  const start = getRequestStartTiming(request, timing);
+  const responseEnd = isAvailableTiming(timing.responseEnd)
+    ? formatDuration(timing.responseEnd)
+    : 'pending';
+  const lines: string[] = [];
+
+  if (start) {
+    const label = start.source === 'browser' ? 'Start' : 'Observed';
+    lines.push(`- ${label}: ${formatLocalTimestamp(start.epochMs)}`);
+    lines.push(`- ${label} epoch ms: ${Math.round(start.epochMs)}`);
+  } else {
+    lines.push('- Start: unavailable');
+  }
+
+  lines.push(`- Duration: ${responseEnd}`);
+  lines.push(
+    `- TTFB: ${formatTimingSpan(timing.requestStart, timing.responseStart)}`,
+  );
+  lines.push(
+    `- DNS: ${formatTimingSpan(timing.domainLookupStart, timing.domainLookupEnd)}`,
+  );
+  lines.push(
+    `- Connect: ${formatTimingSpan(timing.connectStart, timing.connectEnd)}`,
+  );
+  lines.push(
+    `- SSL: ${formatTimingSpan(timing.secureConnectionStart, timing.connectEnd)}`,
+  );
+  lines.push(`- Request start: ${formatRelativeTiming(timing.requestStart)}`);
+  lines.push(`- Response start: ${formatRelativeTiming(timing.responseStart)}`);
+  lines.push(`- Response end: ${formatRelativeTiming(timing.responseEnd)}`);
+
+  return lines;
 }
 
 export function getStatusFromRequest(request: HTTPRequest): string {
@@ -139,8 +240,39 @@ export async function requestHasSetCookie(
   }
 }
 
-export function getFormattedHeaderEntries(headers: HeaderEntry[]): string[] {
-  return headers.map(({name, value}) => `- ${name}:${value}`);
+export function getHeadersExcludingSetCookie(
+  headers: HeaderEntry[],
+): HeaderEntry[] {
+  return headers.filter(({name}) => name.toLowerCase() !== 'set-cookie');
+}
+
+export function getFormattedHeaderEntries(
+  headers: HeaderEntry[],
+  options: HeaderFormatOptions = {},
+): string[] {
+  const sizeLimit = options.sizeLimit ?? HEADER_CONTEXT_SIZE_LIMIT;
+  const omittedLabel = options.omittedLabel ?? 'header entries';
+  const redactSensitiveValues = options.redactSensitiveValues ?? true;
+  return getSizeLimitedLines(
+    headers.map(({name, value}) => {
+      const formattedValue = redactSensitiveValues
+        ? formatInlineHeaderValue(name, value)
+        : value;
+      return `- ${name}:${formattedValue}`;
+    }),
+    sizeLimit,
+    omittedLabel,
+  );
+}
+
+export function getFormattedSetCookieEntries(
+  setCookieHeaders: string[],
+): string[] {
+  return getSizeLimitedLines(
+    setCookieHeaders.map(value => `- ${value}`),
+    SET_COOKIE_CONTEXT_SIZE_LIMIT,
+    'Set-Cookie entries',
+  );
 }
 
 export async function getFormattedResponseBody(
@@ -155,12 +287,21 @@ export async function getFormattedResponseBody(
 
     if (isUtf8(responseBuffer)) {
       const responseAsTest = responseBuffer.toString('utf-8');
+      const contentType = getHeaderValue(
+        httpResponse.headers(),
+        'content-type',
+      );
 
       if (responseAsTest.length === 0) {
         return `<empty response>`;
       }
 
-      return `${getSizeLimitedString(responseAsTest, sizeLimit)}`;
+      return getFormattedTextBody(
+        responseAsTest,
+        contentType,
+        sizeLimit,
+        'responseBody',
+      );
     }
 
     return `<binary data>`;
@@ -177,7 +318,8 @@ export async function getFormattedRequestBody(
   const data = httpRequest.postData();
 
   if (data) {
-    return `${getSizeLimitedString(data, sizeLimit)}`;
+    const contentType = getHeaderValue(httpRequest.headers(), 'content-type');
+    return getFormattedTextBody(data, contentType, sizeLimit, 'requestBody');
   }
 
   return;
@@ -284,18 +426,51 @@ export async function getNetworkRequestExportHints(
     );
   }
 
-  if (requestBody && requestBody.length > LARGE_REQUEST_BODY_LIMIT) {
+  if (requestBody && requestBody.length > BODY_CONTEXT_SIZE_LIMIT) {
     hints.push(
       `Request body is ${requestBody.length} bytes. For exact request bytes, re-run with outputPart="requestBody" and outputFile="network-req-${reqid}-request-body.bin".`,
+    );
+  }
+
+  const requestHeaders = await getRequestHeadersArray(httpRequest).catch(
+    () => [],
+  );
+  if (headersContainSensitiveValues(requestHeaders)) {
+    hints.push(
+      `Sensitive request header values are redacted inline. For exact request headers, re-run with outputPart="all" and outputFile="network-req-${reqid}.json".`,
+    );
+  }
+  if (headersWillBeTruncated(requestHeaders)) {
+    hints.push(
+      `Request headers are truncated inline. For exact request headers, re-run with outputPart="all" and outputFile="network-req-${reqid}.json".`,
     );
   }
 
   const httpResponse = await httpRequest.response();
   if (httpResponse) {
     const headers = httpResponse.headers();
+    const responseHeadersArray = await getResponseHeadersArray(httpResponse);
+    const setCookieHeaders = getSetCookieHeaders(responseHeadersArray);
+    const responseHeadersWithoutSetCookie =
+      getHeadersExcludingSetCookie(responseHeadersArray);
     const contentType = getHeaderValue(headers, 'content-type');
     const sizes = await httpRequest.sizes().catch(() => undefined);
     const responseBodySize = sizes?.responseBodySize ?? 0;
+
+    if (headersContainSensitiveValues(responseHeadersWithoutSetCookie)) {
+      hints.push(
+        `Sensitive response header values are redacted inline. For exact response headers, re-run with outputPart="responseHeaders" and outputFile="network-req-${reqid}-response-headers.json".`,
+      );
+    }
+
+    if (
+      headersWillBeTruncated(responseHeadersWithoutSetCookie) ||
+      setCookiesWillBeTruncated(setCookieHeaders)
+    ) {
+      hints.push(
+        `Response headers are truncated inline. For exact response headers and Set-Cookie values, re-run with outputPart="responseHeaders" and outputFile="network-req-${reqid}-response-headers.json".`,
+      );
+    }
 
     if (isLikelyBinaryContentType(contentType)) {
       hints.push(
@@ -313,10 +488,309 @@ export async function getNetworkRequestExportHints(
 
 function getSizeLimitedString(text: string, sizeLimit: number) {
   if (text.length > sizeLimit) {
-    return `${text.substring(0, sizeLimit) + '... <truncated>'}`;
+    return `${text.substring(0, sizeLimit)}... <truncated ${text.length - sizeLimit} chars>`;
   }
 
   return `${text}`;
+}
+
+function formatInlineHeaderValue(name: string, value: string): string {
+  const normalizedName = name.toLowerCase();
+
+  if (normalizedName === 'set-cookie') {
+    return value;
+  }
+
+  if (normalizedName === 'cookie') {
+    const names = getCookieHeaderNames(value);
+    if (!names.length) {
+      return `<redacted cookie header, ${value.length} chars>`;
+    }
+
+    const shown = names.slice(0, COOKIE_HEADER_NAME_LIMIT).join(', ');
+    const remaining = names.length - COOKIE_HEADER_NAME_LIMIT;
+    return `<redacted cookie header; names: ${shown}${remaining > 0 ? `, +${remaining} more` : ''}; ${value.length} chars>`;
+  }
+
+  if (
+    normalizedName === 'authorization' ||
+    normalizedName === 'proxy-authorization'
+  ) {
+    const scheme = value.trim().match(/^([A-Za-z][A-Za-z0-9._~+/-]*)\s+/)?.[1];
+    return `<redacted authorization${scheme ? `; scheme: ${scheme}` : ''}; ${value.length} chars>`;
+  }
+
+  if (isSensitiveHeaderName(normalizedName)) {
+    return `<redacted sensitive header; ${value.length} chars>`;
+  }
+
+  return value;
+}
+
+function getCookieHeaderNames(value: string): string[] {
+  return value
+    .split(';')
+    .map(part => part.trim())
+    .filter(Boolean)
+    .map(part => {
+      const eq = part.indexOf('=');
+      return (eq === -1 ? part : part.slice(0, eq)).trim();
+    })
+    .filter(Boolean);
+}
+
+function isSensitiveHeaderName(normalizedName: string): boolean {
+  if (normalizedName === 'set-cookie') {
+    return false;
+  }
+
+  if (SENSITIVE_HEADER_EXACT_NAMES.has(normalizedName)) {
+    return true;
+  }
+
+  return SENSITIVE_HEADER_NAME_FRAGMENTS.some(fragment =>
+    normalizedName.includes(fragment),
+  );
+}
+
+export function headersContainSensitiveValues(headers: HeaderEntry[]): boolean {
+  return headers.some(({name}) => isSensitiveHeaderName(name.toLowerCase()));
+}
+
+function getFormattedTextBody(
+  text: string,
+  contentType: string,
+  sizeLimit: number,
+  exactPart: 'requestBody' | 'responseBody',
+): string {
+  const normalizedContentType = contentType.toLowerCase();
+
+  if (isMultipartContentType(normalizedContentType)) {
+    return getMultipartBodySummary(text, contentType, exactPart);
+  }
+
+  if (isHtmlContentType(normalizedContentType)) {
+    const compacted = compactMarkupForPreview(text);
+    return formatPreviewWithNote(
+      `HTML body compacted for inline preview; export ${exactPart} for exact bytes.`,
+      compacted,
+      sizeLimit,
+    );
+  }
+
+  if (isXmlContentType(normalizedContentType)) {
+    const compacted = compactMarkupForPreview(text);
+    return formatPreviewWithNote(
+      `XML body compacted for inline preview; export ${exactPart} for exact bytes.`,
+      compacted,
+      sizeLimit,
+    );
+  }
+
+  if (isJsonContentType(normalizedContentType) || looksLikeJson(text)) {
+    const compacted = compactJsonForPreview(text);
+    if (compacted) {
+      return formatPreviewWithNote(
+        `JSON body compacted for inline preview; export ${exactPart} for exact bytes.`,
+        compacted,
+        sizeLimit,
+      );
+    }
+  }
+
+  if (isFormUrlEncodedContentType(normalizedContentType)) {
+    return getFormUrlEncodedPreview(text, sizeLimit, exactPart);
+  }
+
+  return getSizeLimitedString(text, sizeLimit);
+}
+
+function formatPreviewWithNote(
+  note: string,
+  text: string,
+  sizeLimit: number,
+): string {
+  const prefix = `<${note}>\n`;
+  const textLimit = Math.max(0, sizeLimit - prefix.length);
+  return `${prefix}${getSizeLimitedString(text, textLimit)}`;
+}
+
+function compactJsonForPreview(text: string): string | undefined {
+  try {
+    return JSON.stringify(JSON.parse(text));
+  } catch {
+    return undefined;
+  }
+}
+
+function compactMarkupForPreview(text: string): string {
+  return text
+    .replace(
+      /<(script|style|pre|textarea)\b([^>]*)>[\s\S]*?<\/\1>/gi,
+      (block, tag: string, attrs: string) => {
+        const normalizedAttrs = attrs ? attrs.replace(/\s+/g, ' ').trim() : '';
+        const open = normalizedAttrs
+          ? `<${tag} ${normalizedAttrs}>`
+          : `<${tag}>`;
+        return `${open}<${tag} content omitted: ${block.length} chars></${tag}>`;
+      },
+    )
+    .replace(/>\s+</g, '><')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getFormUrlEncodedPreview(
+  text: string,
+  sizeLimit: number,
+  exactPart: 'requestBody' | 'responseBody',
+): string {
+  const params = new URLSearchParams(text);
+  const entries = [...params.entries()];
+  const shown = entries
+    .slice(0, FORM_FIELD_PREVIEW_LIMIT)
+    .map(([name, value]) => `${name}=${value}`);
+  const omitted = entries.length - shown.length;
+  const preview = `${shown.join('&')}${omitted > 0 ? `&... <${omitted} more fields>` : ''}`;
+  return formatPreviewWithNote(
+    `Form URL-encoded body preview: ${entries.length} fields, ${text.length} chars; export ${exactPart} for exact bytes.`,
+    preview,
+    sizeLimit,
+  );
+}
+
+function getMultipartBodySummary(
+  text: string,
+  contentType: string,
+  exactPart: 'requestBody' | 'responseBody',
+): string {
+  const boundary = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType);
+  const boundaryValue = boundary?.[1] ?? boundary?.[2]?.trim();
+  const parts = boundaryValue
+    ? text
+        .split(`--${boundaryValue}`)
+        .filter(part => part.trim() && part.trim() !== '--')
+    : [];
+  const partSummaries = parts.slice(0, FORM_FIELD_PREVIEW_LIMIT).map(part => {
+    const name = /name="([^"]+)"/i.exec(part)?.[1] ?? '<unnamed>';
+    const filename = /filename="([^"]*)"/i.exec(part)?.[1];
+    const partContentType =
+      /content-type:\s*([^\r\n]+)/i.exec(part)?.[1]?.trim() ?? '';
+    return `${name}${filename !== undefined ? ` file="${filename}"` : ''}${partContentType ? ` type="${partContentType}"` : ''}`;
+  });
+
+  return [
+    `<multipart body hidden from inline preview; export ${exactPart} for exact bytes>`,
+    `Parts: ${parts.length || 'unknown'}`,
+    ...(partSummaries.length ? [`Preview: ${partSummaries.join(', ')}`] : []),
+  ].join('\n');
+}
+
+function isHtmlContentType(contentType: string): boolean {
+  return contentType.includes('text/html');
+}
+
+function isXmlContentType(contentType: string): boolean {
+  return (
+    contentType.includes('xml') ||
+    contentType.includes('image/svg+xml') ||
+    contentType.includes('application/xhtml+xml')
+  );
+}
+
+function isJsonContentType(contentType: string): boolean {
+  return (
+    contentType.includes('application/json') ||
+    contentType.includes('+json') ||
+    contentType.includes('text/json')
+  );
+}
+
+function isFormUrlEncodedContentType(contentType: string): boolean {
+  return contentType.includes('application/x-www-form-urlencoded');
+}
+
+function isMultipartContentType(contentType: string): boolean {
+  return contentType.includes('multipart/form-data');
+}
+
+function looksLikeJson(text: string): boolean {
+  const trimmed = text.trimStart();
+  return trimmed.startsWith('{') || trimmed.startsWith('[');
+}
+
+function getUrlForList(urlString: string): string {
+  if (urlString.length <= LIST_URL_CONTEXT_LIMIT) {
+    return urlString;
+  }
+
+  try {
+    const url = new URL(urlString);
+    const queryLength = url.search.length ? url.search.length - 1 : 0;
+    const queryEntries = [...url.searchParams].length;
+    const base = `${url.origin}${url.pathname}`;
+    const suffix = queryLength
+      ? `?... [query: ${queryEntries} params, ${queryLength} chars]`
+      : url.hash
+        ? '#...'
+        : '';
+    const baseLimit = Math.max(40, LIST_URL_CONTEXT_LIMIT - suffix.length);
+    return `${getStartLimitedString(base, baseLimit)}${suffix}`;
+  } catch {
+    return getStartLimitedString(urlString, LIST_URL_CONTEXT_LIMIT);
+  }
+}
+
+function getStartLimitedString(text: string, sizeLimit: number): string {
+  if (text.length <= sizeLimit) {
+    return text;
+  }
+  return `${text.slice(0, Math.max(0, sizeLimit - 3))}...`;
+}
+
+function getSizeLimitedLines(
+  lines: string[],
+  sizeLimit: number,
+  omittedLabel: string,
+): string[] {
+  const result: string[] = [];
+  let used = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineSize = line.length + 1;
+    if (used + lineSize <= sizeLimit) {
+      result.push(line);
+      used += lineSize;
+      continue;
+    }
+
+    const remaining = sizeLimit - used;
+    if (remaining > 40) {
+      result.push(getSizeLimitedString(line, remaining));
+    }
+    result.push(
+      `- ... <truncated ${lines.length - i} ${omittedLabel}; use outputFile for exact values>`,
+    );
+    break;
+  }
+
+  return result;
+}
+
+function headersWillBeTruncated(headers: HeaderEntry[]): boolean {
+  return headerLinesSize(headers) > HEADER_CONTEXT_SIZE_LIMIT;
+}
+
+function setCookiesWillBeTruncated(setCookieHeaders: string[]): boolean {
+  return (
+    setCookieHeaders.map(value => `- ${value}`).join('\n').length >
+    SET_COOKIE_CONTEXT_SIZE_LIMIT
+  );
+}
+
+function headerLinesSize(headers: HeaderEntry[]): number {
+  return headers.map(({name, value}) => `- ${name}:${value}`).join('\n').length;
 }
 
 async function getNetworkRequestSnapshot(httpRequest: HTTPRequest) {
@@ -358,7 +832,89 @@ async function getNetworkRequestSnapshot(httpRequest: HTTPRequest) {
     responseBody,
     sizes,
     timing: httpRequest.timing(),
+    observedAt: getObservedAt(httpRequest),
   };
+}
+
+function getRequestStartTiming(
+  request: HTTPRequest,
+  timing: RequestTiming,
+): RequestStartTiming | undefined {
+  if (Number.isFinite(timing.startTime) && timing.startTime > 0) {
+    return {
+      epochMs: timing.startTime,
+      source: 'browser',
+    };
+  }
+
+  const observedAt = getObservedAt(request);
+  if (observedAt !== undefined) {
+    return {
+      epochMs: observedAt,
+      source: 'observed',
+    };
+  }
+
+  return undefined;
+}
+
+function getObservedAt(request: HTTPRequest): number | undefined {
+  const observedAt = (request as RequestWithObservedAt)[
+    networkRequestObservedAtSymbol
+  ];
+  return typeof observedAt === 'number' &&
+    Number.isFinite(observedAt) &&
+    observedAt > 0
+    ? observedAt
+    : undefined;
+}
+
+function isAvailableTiming(value: number): boolean {
+  return Number.isFinite(value) && value >= 0;
+}
+
+function formatLocalTimestamp(epochMs: number): string {
+  const date = new Date(epochMs);
+  const timezoneOffsetMinutes = -date.getTimezoneOffset();
+  const timezoneSign = timezoneOffsetMinutes >= 0 ? '+' : '-';
+  const absoluteOffset = Math.abs(timezoneOffsetMinutes);
+
+  return `${date.getFullYear()}-${padNumber(date.getMonth() + 1)}-${padNumber(date.getDate())} ${padNumber(date.getHours())}:${padNumber(date.getMinutes())}:${padNumber(date.getSeconds())}.${padNumber(date.getMilliseconds(), 3)} ${timezoneSign}${padNumber(Math.floor(absoluteOffset / 60))}:${padNumber(absoluteOffset % 60)}`;
+}
+
+function padNumber(value: number, length = 2): string {
+  return `${value}`.padStart(length, '0');
+}
+
+function formatDuration(valueMs: number): string {
+  if (!Number.isFinite(valueMs) || valueMs < 0) {
+    return 'unavailable';
+  }
+  if (valueMs < 1000) {
+    return `${Math.round(valueMs)}ms`;
+  }
+  if (valueMs < 10000) {
+    return `${(valueMs / 1000).toFixed(2)}s`;
+  }
+  return `${(valueMs / 1000).toFixed(1)}s`;
+}
+
+function formatTimingSpan(startMs: number, endMs: number): string {
+  if (
+    !isAvailableTiming(startMs) ||
+    !isAvailableTiming(endMs) ||
+    endMs < startMs
+  ) {
+    return 'unavailable';
+  }
+  return `${formatDuration(endMs - startMs)} (${formatRelativeTiming(startMs)} to ${formatRelativeTiming(endMs)})`;
+}
+
+function formatRelativeTiming(valueMs: number): string {
+  if (!isAvailableTiming(valueMs)) {
+    return 'unavailable';
+  }
+  return `+${formatDuration(valueMs)}`;
 }
 
 export async function getRequestHeadersArray(
@@ -405,6 +961,37 @@ export function getSetCookieHeaders(
   return headersArray
     .filter(({name}) => name.toLowerCase() === 'set-cookie')
     .map(({value}) => value);
+}
+
+async function getSetCookieListMarker(request: HTTPRequest): Promise<string> {
+  const httpResponse = await request.response();
+  if (!httpResponse) {
+    return '';
+  }
+
+  try {
+    const setCookieHeaders = getSetCookieHeaders(
+      await getResponseHeadersArray(httpResponse),
+    );
+    if (!setCookieHeaders.length) {
+      return '';
+    }
+
+    const names = setCookieHeaders.map(getSetCookieName);
+    const shown = names.slice(0, LIST_SET_COOKIE_NAME_LIMIT).join(', ');
+    const remaining = names.length - LIST_SET_COOKIE_NAME_LIMIT;
+    return ` set-cookie: ${shown}${remaining > 0 ? `, +${remaining} more` : ''}`;
+  } catch {
+    return ' set-cookie';
+  }
+}
+
+function getSetCookieName(setCookieHeader: string): string {
+  const eq = setCookieHeader.indexOf('=');
+  if (eq <= 0) {
+    return '<unnamed>';
+  }
+  return setCookieHeader.slice(0, eq).trim() || '<unnamed>';
 }
 
 async function readResponseBody(

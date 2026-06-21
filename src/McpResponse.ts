@@ -9,6 +9,7 @@ import {AggregatedIssue} from '../node_modules/chrome-devtools-frontend/mcp/mcp.
 import {mapIssueToMessageObject} from './DevtoolsUtils.js';
 import type {ConsoleMessageData} from './formatters/consoleFormatter.js';
 import {
+  formatConsoleArgValue,
   formatConsoleEventShort,
   formatConsoleEventVerbose,
 } from './formatters/consoleFormatter.js';
@@ -16,6 +17,9 @@ import {
   getFormattedHeaderEntries,
   getFormattedResponseBody,
   getFormattedRequestBody,
+  getFormattedRequestTiming,
+  getFormattedSetCookieEntries,
+  getHeadersExcludingSetCookie,
   getNetworkRequestExportHints,
   getRequestHeadersArray,
   getResponseHeadersArray,
@@ -254,9 +258,7 @@ export class McpResponse implements Response {
               const stringArg = await arg.jsonValue().catch(() => {
                 // Ignore errors.
               });
-              return typeof stringArg === 'object'
-                ? JSON.stringify(stringArg)
-                : String(stringArg);
+              return formatConsoleArgValue(stringArg);
             }),
           ),
         };
@@ -310,16 +312,7 @@ export class McpResponse implements Response {
                 consoleMessageStableId,
                 type: consoleMessage.type(),
                 message: consoleMessage.text(),
-                args: await Promise.all(
-                  consoleMessage.args().map(async arg => {
-                    const stringArg = await arg.jsonValue().catch(() => {
-                      // Ignore errors.
-                    });
-                    return typeof stringArg === 'object'
-                      ? JSON.stringify(stringArg)
-                      : String(stringArg);
-                  }),
-                ),
+                argCount: consoleMessage.args().length,
               };
             }
             if (item instanceof AggregatedIssue) {
@@ -590,6 +583,8 @@ export class McpResponse implements Response {
     const httpRequest = context.getNetworkRequestById(id);
     response.push(`## Request ${httpRequest.url()}`);
     response.push(`Status:  ${await getStatusFromRequestAsync(httpRequest)}`);
+    response.push(`### Timing`);
+    response.push(...getFormattedRequestTiming(httpRequest));
     response.push(`### Request Headers`);
     for (const line of getFormattedHeaderEntries(
       await getRequestHeadersArray(httpRequest),
@@ -605,17 +600,21 @@ export class McpResponse implements Response {
     const httpResponse = await httpRequest.response();
     if (httpResponse) {
       const responseHeaders = await getResponseHeadersArray(httpResponse);
-      response.push(`### Response Headers`);
-      for (const line of getFormattedHeaderEntries(responseHeaders)) {
-        response.push(line);
+      const responseHeadersWithoutSetCookie =
+        getHeadersExcludingSetCookie(responseHeaders);
+      if (responseHeadersWithoutSetCookie.length) {
+        response.push(`### Response Headers`);
+        for (const line of getFormattedHeaderEntries(
+          responseHeadersWithoutSetCookie,
+        )) {
+          response.push(line);
+        }
       }
 
       const setCookieHeaders = getSetCookieHeaders(responseHeaders);
       if (setCookieHeaders.length) {
         response.push(`### Set-Cookie`);
-        for (const value of setCookieHeaders) {
-          response.push(`- ${value}`);
-        }
+        response.push(...getFormattedSetCookieEntries(setCookieHeaders));
       }
     }
 

@@ -2,20 +2,20 @@
 
 English | [中文](README.md)
 
-A JavaScript reverse engineering MCP server that enables AI coding assistants (Claude, Cursor, Copilot) to debug and analyze JavaScript code in web pages.
+An AI-first / AI-native JavaScript reverse engineering MCP server that lets coding assistants (Claude, Cursor, Copilot) debug, locate, save, and replay JavaScript behavior in real web pages like an analyst.
 
-Built on the [Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-nodejs) protocol-layer anti-detection, with an optional [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) source-level fingerprint mode for strong anti-bot sites. Headed mode, persistent login, and zero JS injection — looks and behaves like a real Chrome.
+It does not simply expose raw Chrome DevTools APIs to the model. It reorganizes scripts, breakpoints, network traffic, WebSocket data, browser state, and local file I/O into tools shaped for continuous AI Agent reasoning and action. Anti-detection is one supporting capability: default [Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-nodejs) protocol-layer stealth, plus optional [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) source-level fingerprint mode for strong anti-bot sites.
 
 ## Features
 
-- **Headed debugging by default**: see the browser, set breakpoints, step through JS — the way a real reverse engineer works
-- **Persistent login state**: cookies and localStorage survive across sessions
-- **Two-layer anti-detection**: Patchright avoids `Runtime.enable`/`Console.enable` CDP leaks at the protocol level; opt-in `--cloak` adds 49 source-level C++ fingerprint patches (canvas, WebGL, audio, GPU, fonts) via the CloakBrowser binary
-- **Script analysis**: list all loaded JS scripts, search code, get/save source
-- **Breakpoint debugging**: set/remove breakpoints, conditional breakpoints, precise positioning in minified code
-- **Execution control**: pause/resume, step over/into/out with source context in response
-- **Runtime inspection**: evaluate at breakpoints, inspect scope variables
-- **Network analysis**: request initiator call stacks, XHR breakpoints, WebSocket message analysis
+- **AI-native tool design**: tool granularity, output boundaries, and error guidance are designed around Agent decisions
+- **Replayable workflows**: script source, raw network data, and binary results can be exported to local files and reused as later inputs
+- **Breakpoint-context execution**: evaluate directly in paused call frames, inspect scope variables, step through code with source context
+- **Script analysis**: list loaded JS, search code, get/save source, and auto-format large minified scripts
+- **Network & WebSocket analysis**: request initiator stacks, XHR breakpoints, Set-Cookie detection, raw body/header export, WebSocket message grouping
+- **Browser-state replay**: clear current-site cookies, cache, storage, and sessionStorage to reproduce cookie and anti-bot initialization flows
+- **Headed + persistent by default**: visible browser, cookies and localStorage survive across sessions
+- **Optional anti-detection layer**: Patchright protocol-layer stealth by default; add `--cloak` for CloakBrowser on strong anti-bot sites
 
 ## Requirements
 
@@ -81,9 +81,21 @@ Then use local path in your MCP configuration:
 }
 ```
 
-## Anti-Detection
+## AI-First Design
 
-Stealth in this project is cleanly layered. The wrapper itself injects **zero** JavaScript and runs no `Object.defineProperty` hacks — those would themselves become detectable. All anti-detection happens in two well-separated layers:
+The core goal of this project is not "operate a browser". It is to let an AI Agent complete a real JavaScript reverse-engineering loop: open a page, pass risk checks, locate scripts, save source, set breakpoints, trigger behavior, inspect runtime state, export network material, reset state, and continue reasoning.
+
+Several design choices show up throughout the codebase:
+
+- **Tools are Agent primitives, not DevTools menu items**: `list_network_requests` can list an index, inspect a `reqid`, or export exact material with `outputFile`; `evaluate_script` can run in the page, in a paused call frame, and with one local file passed through `localFilePath`.
+- **Outputs should guide the next action**: list output stays short and scannable; detail output is bounded; large results point to export paths; pending requests explicitly tell the Agent to resume before reading response data instead of waiting forever.
+- **Local files are the analysis workbench**: `save_script_source`, `list_network_requests(..., outputFile)`, and `evaluate_script(..., localFilePath)` let the Agent move between browser state, network captures, and local files without stuffing huge code or binary blobs into chat context.
+- **State can be cleaned and replayed**: the default profile preserves login state; `--isolated` gives a disposable clean environment; `clear_site_data` clears current-site state for repeated cookie-generation, risk-control, and request-chain analysis.
+- **Anti-detection serves the debugging loop**: silent CDP navigation, real viewport, Google referer, Patchright, and CloakBrowser exist so the Agent can enter the target page and keep analyzing. This project is not a generic crawler framework.
+
+## Anti-Detection (Supporting Capability)
+
+Anti-detection is one of js-reverse-mcp's supporting capabilities. The wrapper itself injects **zero** JavaScript and runs no `Object.defineProperty` hacks — those would themselves become detectable. All anti-detection happens in two well-separated layers:
 
 | Layer                                 | Default mode                                                                                                      | `--cloak` mode                                                                                                     |
 | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
@@ -100,7 +112,7 @@ Other navigation-level safeguards (both modes):
 
 When to enable `--cloak`: only for sites that block you on fingerprint despite all of the above. See [docs/cloak.en.md](docs/cloak.en.md) for the full guide and tradeoffs.
 
-## Tools (21)
+## Tools (22)
 
 ### Page & Navigation
 
@@ -135,18 +147,24 @@ When to enable `--cloak`: only for sites that block you on fingerprint despite a
 
 ### Network & WebSocket
 
-| Tool                     | Description                                                          |
-| ------------------------ | -------------------------------------------------------------------- |
-| `list_network_requests`  | List network requests, or get one by reqid                           |
-| `get_request_initiator`  | Get JavaScript call stack for a network request                      |
-| `get_websocket_messages` | List WebSocket connections, analyze messages, or get message details |
+| Tool                     | Description                                                                   |
+| ------------------------ | ----------------------------------------------------------------------------- |
+| `list_network_requests`  | List requests, inspect one request, or export raw headers/body/query material |
+| `get_request_initiator`  | Get JavaScript call stack for a network request                               |
+| `get_websocket_messages` | List WebSocket connections, analyze messages, or get message details          |
+
+### Browser State
+
+| Tool              | Description                                                                |
+| ----------------- | -------------------------------------------------------------------------- |
+| `clear_site_data` | Clear current-site cookies, HTTP cache, origin storage, and sessionStorage |
 
 ### Inspection
 
-| Tool                    | Description                                                                                                  |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `evaluate_script`       | Execute JavaScript in the page (supports paused context, main world, and saving results/binary data to file) |
-| `list_console_messages` | List console messages, or get one by msgid                                                                   |
+| Tool                    | Description                                                                                                 |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `evaluate_script`       | Execute JavaScript in page or paused context, with main-world mode, result export, and one local input file |
+| `list_console_messages` | List console messages, or get one by msgid                                                                  |
 
 ## Usage Examples
 
@@ -180,6 +198,28 @@ Trigger an action on the page, then inspect arguments, call stack and scope vari
 
 ```
 List WebSocket connections, analyze message patterns, view messages of specific types
+```
+
+### Agent-Friendly Full Capture Flow
+
+Navigation intentionally stays CDP-silent during the first page load. The recommended flow is to pass risk controls first, then reload with collectors active:
+
+```
+1. Open the target page with new_page
+2. Call list_network_requests to activate collectors
+3. Reload with navigate_page(type="reload")
+4. Call list_network_requests again to inspect the complete request list
+5. Export key reqids with outputFile when exact material is needed
+```
+
+### Cookie / Risk-Control Replay Flow
+
+```
+1. Run clear_site_data to reset current-site state
+2. Reload with navigate_page(type="reload")
+3. Use list_network_requests to find cookie-setting or sensor-submitting requests
+4. Export requestBody / responseHeaders / responseBody
+5. Use evaluate_script + localFilePath to recompute or verify in page context
 ```
 
 ## Configuration Options

@@ -2,20 +2,20 @@
 
 [English](README_en.md) | 中文
 
-JavaScript 逆向工程 MCP 服务器，让你的 AI 编码助手（如 Claude、Cursor、Copilot）能够调试和分析网页中的 JavaScript 代码。
+AI-first / AI-native 的 JavaScript 逆向工程 MCP Server，让你的 AI 编码助手（如 Claude、Cursor、Copilot）能够像分析师一样持续调试、定位、保存和复盘网页中的 JavaScript 行为。
 
-基于 [Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-nodejs) 协议层反检测，对强反爬站点可选启用 [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) 源码层指纹模式。**有头模式 + 持久化登录态 + 零 JS 注入** —— 看起来、行为都像一个真实的 Chrome。
+它不是把 Chrome DevTools API 原样搬给模型，而是把脚本、断点、网络、WebSocket、浏览器状态和本地文件 I/O 重新组织成适合 AI Agent 连续推理和操作的工具。反检测是其中一部分能力：默认基于 [Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-nodejs) 协议层 stealth，对强反爬站点可选启用 [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) 源码层指纹模式。
 
 ## 功能特点
 
-- **默认有头调试**：看得到浏览器，下断点、单步、看调用栈 —— 真正的逆向流程
-- **持久化登录态**：cookies / localStorage 跨会话保留
-- **双层反检测**：Patchright 在 CDP 协议层规避 `Runtime.enable`、`Console.enable` 等泄露点；可选 `--cloak` 启用 CloakBrowser 二进制，再加 49 个 C++ 源码层指纹 patch（canvas / WebGL / audio / GPU / 字体）
-- **脚本分析**：列出所有加载的 JS，搜索代码，获取/保存源码
-- **断点调试**：设置/移除断点，支持条件断点，压缩代码中精确定位
-- **执行控制**：暂停/恢复，单步 over/into/out，响应带源码上下文
-- **运行时检查**：在断点处求值，检查作用域变量
-- **网络分析**：请求调用栈、XHR 断点、WebSocket 消息分析
+- **AI-native 工具设计**：工具粒度、输出边界和错误提示都围绕 Agent 决策设计，避免把模型推向无效下一步
+- **可复盘工作流**：脚本源码、网络原始数据、二进制结果都能导出到本地文件，再作为后续分析输入
+- **断点上下文执行**：暂停时可直接在 call frame 中求值，检查作用域变量，单步执行并返回源码上下文
+- **脚本分析**：列出所有加载的 JS，搜索代码，获取/保存源码，自动格式化大型压缩脚本
+- **网络与 WebSocket 分析**：请求调用栈、XHR 断点、Set-Cookie 识别、原始 body/header 导出、WebSocket 消息分组
+- **浏览器状态重放**：清理当前站点 cookies / cache / storage / sessionStorage，配合 reload 复现 cookie 和风控流程
+- **默认有头 + 持久化登录态**：看得到浏览器，cookies / localStorage 跨会话保留
+- **可选反检测层**：Patchright 协议层 stealth 默认启用；强反爬站点可加 `--cloak` 使用 CloakBrowser 二进制
 
 ## 系统要求
 
@@ -81,9 +81,21 @@ npm run build
 }
 ```
 
-## 反检测机制
+## AI-first 设计
 
-本项目的反检测**分层清晰**。包装层（这个 MCP 自己）**零 JS 注入**、不做 `Object.defineProperty` hack（那本身就是检测信号）。所有反检测都在两个互不重叠的层：
+这个项目的核心目标不是“能操作浏览器”，而是让 AI Agent 能稳定完成一轮真实 JS 逆向任务：打开页面、过风控、定位脚本、保存源码、设置断点、触发行为、检查运行时、导出网络材料、复现状态，然后继续推理。
+
+几个设计取向贯穿在代码里：
+
+- **工具是 Agent primitives，不是 DevTools 菜单映射**：`list_network_requests` 既能列索引，也能按 `reqid` 查详情，还能用 `outputFile` 导出精确材料；`evaluate_script` 既能在页面执行，也能在断点 call frame 执行，还能接收 `localFilePath` 输入。
+- **输出要能指导下一步**：列表输出保持短而可扫描；详情输出有边界；长结果提示导出；pending 请求会明确提示先恢复执行，避免 Agent 等一个永远不会完成的 response。
+- **本地文件是分析工作台**：`save_script_source`、`list_network_requests(..., outputFile)`、`evaluate_script(..., localFilePath)` 让 Agent 能在浏览器、网络和本地文件之间往返，而不是把大段代码或二进制数据塞进聊天上下文。
+- **状态可清理、流程可重放**：默认 profile 保留登录态；`--isolated` 提供一次性干净环境；`clear_site_data` 只清当前站点相关状态，用来反复复现 cookie 生成、风控初始化和请求链路。
+- **反检测服务于调试链路**：CDP 静默导航、真实视口、Google referer、Patchright 和 CloakBrowser 的目标都是让 Agent 能进入目标页面继续分析，而不是把项目变成一个泛用爬虫框架。
+
+## 反检测机制（支撑能力）
+
+反检测是 js-reverse-mcp 的底层支撑能力之一。包装层（这个 MCP 自己）**零 JS 注入**、不做 `Object.defineProperty` hack（那本身就是检测信号）。所有反检测都在两个互不重叠的层：
 
 | 层                             | 默认模式                                                                                                        | `--cloak` 模式                                                                                                    |
 | ------------------------------ | --------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
@@ -100,7 +112,7 @@ npm run build
 
 **何时开 `--cloak`**：只在以上还不够、被站点指纹拦截时才用。详见 [docs/cloak.md](docs/cloak.md)。
 
-## 工具列表（21 个）
+## 工具列表（22 个）
 
 ### 页面与导航
 
@@ -135,18 +147,24 @@ npm run build
 
 ### 网络与 WebSocket
 
-| 工具                     | 描述                                            |
-| ------------------------ | ----------------------------------------------- |
-| `list_network_requests`  | 列出网络请求，或按 reqid 获取单条详情           |
-| `get_request_initiator`  | 获取网络请求的 JavaScript 调用栈                |
-| `get_websocket_messages` | 列出 WebSocket 连接、分析消息模式或获取消息详情 |
+| 工具                     | 描述                                                        |
+| ------------------------ | ----------------------------------------------------------- |
+| `list_network_requests`  | 列出网络请求、查看详情，或导出 header/body/query 等原始材料 |
+| `get_request_initiator`  | 获取网络请求的 JavaScript 调用栈                            |
+| `get_websocket_messages` | 列出 WebSocket 连接、分析消息模式或获取消息详情             |
+
+### 浏览器状态
+
+| 工具              | 描述                                                                   |
+| ----------------- | ---------------------------------------------------------------------- |
+| `clear_site_data` | 清理当前站点相关 cookies、HTTP cache、origin storage 和 sessionStorage |
 
 ### 检查工具
 
-| 工具                    | 描述                                                                             |
-| ----------------------- | -------------------------------------------------------------------------------- |
-| `evaluate_script`       | 在页面中执行 JavaScript（支持断点上下文、主世界执行和保存结果/二进制数据到文件） |
-| `list_console_messages` | 列出控制台消息，或按 msgid 获取单条详情                                          |
+| 工具                    | 描述                                                                          |
+| ----------------------- | ----------------------------------------------------------------------------- |
+| `evaluate_script`       | 在页面或断点上下文执行 JavaScript，支持主世界、保存结果和读取一个本地输入文件 |
+| `list_console_messages` | 列出控制台消息，或按 msgid 获取单条详情                                       |
 
 ## 使用示例
 
@@ -180,6 +198,28 @@ npm run build
 
 ```
 列出 WebSocket 连接，分析消息模式，查看特定类型的消息内容
+```
+
+### Agent 推荐的完整捕获流程
+
+因为导航阶段会刻意保持 CDP 静默，首次进入目标页时不会立即打开 Network / Debugger 域。推荐流程是先过风控，再刷新捕获：
+
+```
+1. new_page 打开目标页
+2. 调用 list_network_requests 激活 collectors
+3. navigate_page(type="reload") 刷新页面
+4. 再次 list_network_requests 查看完整请求
+5. 对关键 reqid 使用 outputFile 导出原始材料
+```
+
+### Cookie / 风控重放流程
+
+```
+1. clear_site_data 清理当前站点状态
+2. navigate_page(type="reload") 重新触发初始化
+3. list_network_requests 找到设置 cookie 或提交 sensor 的请求
+4. 导出 requestBody / responseHeaders / responseBody
+5. 用 evaluate_script + localFilePath 在页面上下文中复算或验证
 ```
 
 ## 配置选项

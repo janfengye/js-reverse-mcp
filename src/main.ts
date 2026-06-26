@@ -6,6 +6,9 @@
 
 import './polyfill.js';
 
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+
 import {ensureBrowserConnected, ensureBrowserLaunched} from './browser.js';
 import type {BrowserResult} from './browser.js';
 import {parseArguments} from './cli.js';
@@ -33,10 +36,17 @@ import * as siteDataTools from './tools/siteData.js';
 import type {ToolDefinition} from './tools/ToolDefinition.js';
 import * as websocketTools from './tools/websocket.js';
 
-// If moved update release-please config
-// x-release-please-start-version
-const VERSION = '0.10.2';
-// x-release-please-end
+// Read the version from package.json at runtime so it never drifts from the
+// published package. Releases here are driven by `npm version` + a git tag, not
+// release-please, so a hardcoded constant would go stale.
+const VERSION = (
+  JSON.parse(
+    fs.readFileSync(
+      path.join(import.meta.dirname, '../../package.json'),
+      'utf8',
+    ),
+  ) as {version: string}
+).version;
 
 export const args = parseArguments(VERSION);
 
@@ -47,8 +57,7 @@ const server = new McpServer(
   {
     name: 'js-reverse',
     title: 'JS Reverse Engineering MCP Server',
-    description:
-      'JavaScript reverse engineering and debugging via Chrome DevTools. Built on Patchright anti-detection engine — passes mainstream browser fingerprint checks (Zhihu, Google, etc.) out of the box.',
+    description: `JavaScript reverse engineering and debugging via Chrome DevTools (v${VERSION}). Built on Patchright anti-detection engine — passes mainstream browser fingerprint checks (Zhihu, Google, etc.) out of the box.`,
     version: VERSION,
   },
   {capabilities: {logging: {}}},

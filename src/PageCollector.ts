@@ -165,21 +165,24 @@ export const MAX_CACHED_BODY_BYTES = 5 * 1024 * 1024;
 export const MAX_CACHED_TOTAL_BYTES = 50 * 1024 * 1024;
 
 /**
- * Upper bound on retained network request records per page. Buckets are
- * returned in full to keep records reachable, so this FIFO cap (oldest
- * navigation buckets dropped first) is the memory safety valve, symmetric with
- * MAX_INITIATOR_ENTRIES. Evicting a record also reclaims its cached body bytes
- * from the per-page budget, making that budget a rolling window rather than a
- * one-way ratchet.
+ * Upper bound on retained network request records per page. The network
+ * collector keeps a single flat FIFO queue (navigation-agnostic): once the
+ * queue exceeds this cap the oldest request is evicted, and evicting a record
+ * also reclaims its cached body bytes from the per-page budget so that budget is
+ * a rolling window rather than a one-way ratchet. The analyst establishes a
+ * clean baseline on demand via clear_network_requests, not via navigation — so
+ * a small recent working set is all that needs to stay inspectable.
  */
-const MAX_RETAINED_REQUESTS = 5000;
+const MAX_RETAINED_REQUESTS = 1000;
 
 const BODY_CAPTURE_TIMEOUT_MS = 5000;
 
 /**
- * Upper bound on retained per-page initiator entries. Initiators are no longer
- * cleared on navigation, so this FIFO cap (oldest dropped first) keeps the map
- * from growing without limit on long-lived pages.
+ * Upper bound on retained per-page initiator entries. Kept >= the request queue
+ * cap so every in-queue request keeps its initiator: initiators are recorded on
+ * a different CDP event than the request record, so a tighter cap could evict an
+ * initiator while its request is still queued. Bounded by a FIFO cap (oldest
+ * dropped first) and wiped wholesale by clear_network_requests.
  */
 const MAX_INITIATOR_ENTRIES = 5000;
 
@@ -250,12 +253,7 @@ export class PageCollector<T> {
     const listeners = this.#listenersInitializer(value => {
       const withId = value as WithSymbolId<T>;
       withId[stableIdSymbol] = idGenerator();
-
-      const navigations = this.storage.get(page) ?? [[]];
-      navigations[0].push(withId);
-      if (navigations[0].length > this.#maxItemsPerNavigation) {
-        navigations[0].shift();
-      }
+      this.store(page, withId);
     });
 
     listeners['framenavigated'] = (frame: Frame) => {
@@ -271,6 +269,19 @@ export class PageCollector<T> {
     }
 
     this.#listeners.set(page, listeners);
+  }
+
+  /**
+   * Append a collected item to the page's storage. Default implementation keeps
+   * the bucketed-by-navigation model (current bucket capped at
+   * #maxItemsPerNavigation). NetworkCollector overrides this with a flat FIFO.
+   */
+  protected store(page: Page, withId: WithSymbolId<T>): void {
+    const navigations = this.storage.get(page) ?? [[]];
+    navigations[0].push(withId);
+    if (navigations[0].length > this.#maxItemsPerNavigation) {
+      navigations[0].shift();
+    }
   }
 
   protected splitAfterNavigation(page: Page) {
@@ -879,67 +890,70 @@ export class NetworkCollector extends PageCollector<HTTPRequest> {
     return initiatorMap?.get(requestId);
   }
 
-  override splitAfterNavigation(page: Page) {
-    const navigations = this.storage.get(page) ?? [];
-    if (!navigations) {
-      return;
-    }
-
-    const requests = navigations[0];
-
-    const lastRequestIdx = requests.findLastIndex(request => {
-      try {
-        return request.frame() === page.mainFrame()
-          ? request.isNavigationRequest()
-          : false;
-      } catch {
-        // frame() can throw for service worker requests
-        return false;
+  /**
+   * Append a request to the page's flat FIFO queue. The network collector is
+   * navigation-agnostic: a single bucket (index 0) holds the most recent
+   * MAX_RETAINED_REQUESTS requests. Evicting the oldest reclaims its cached
+   * response body bytes from the per-page budget, so the 50MB budget is a
+   * rolling window, never a one-way ratchet.
+   */
+  protected override store(
+    page: Page,
+    withId: WithSymbolId<HTTPRequest>,
+  ): void {
+    const navigations = this.storage.get(page) ?? [[]];
+    const queue = navigations[0];
+    queue.push(withId);
+    while (queue.length > MAX_RETAINED_REQUESTS) {
+      const evicted = queue.shift();
+      if (evicted) {
+        this.#reclaimResponseBodyBudget(page, [evicted]);
       }
-    });
-
-    // Keep all requests since the last navigation request including that
-    // navigation request itself.
-    // Keep the reference
-    if (lastRequestIdx !== -1) {
-      const fromCurrentNavigation = requests.splice(lastRequestIdx);
-      navigations.unshift(fromCurrentNavigation);
-    } else if (requests.length > 0) {
-      // No navigation request was captured (e.g. a client-side redirect): the
-      // whole current bucket belongs to the previous navigation, so start a
-      // fresh bucket. Skip when it is already empty to avoid piling up empty
-      // buckets across redirect chains.
-      navigations.unshift([]);
     }
-
-    this.#enforceRetentionLimit(page, navigations);
-
-    // Do NOT clear initiator data on navigation. Requests collected before a
-    // navigation (e.g. the POST that triggered it) stay inspectable afterwards,
-    // so their initiators must survive too. The map is instead bounded by a
-    // FIFO cap enforced at insertion time.
   }
 
   /**
-   * Memory safety valve for the unbounded "return all buckets" retention: drop
-   * the oldest navigation buckets once the total retained record count exceeds
-   * the cap, reclaiming each evicted request's cached body bytes from the
-   * per-page budget. The current navigation bucket (index 0) is never evicted.
+   * Navigation does not split or trim the network queue. Requests accumulate in
+   * one FIFO bucket regardless of navigation, so a request that already fired
+   * (e.g. the POST that triggered a redirect) stays inspectable afterwards. The
+   * analyst trims on demand via clear(), not on navigation — see the method doc
+   * and MAX_RETAINED_REQUESTS.
    */
-  #enforceRetentionLimit(page: Page, navigations: HTTPRequest[][]): void {
-    let total = 0;
-    for (const bucket of navigations) {
-      total += bucket.length;
+  override splitAfterNavigation(_page: Page) {
+    // Intentionally a no-op.
+  }
+
+  /**
+   * Drop all collected requests for a page and release every parallel structure
+   * that tracks them: the cached response body budget and both initiator maps.
+   * Lets the analyst establish a clean baseline before the action they want to
+   * study (the DevTools "clear, then act" workflow). The per-page stable-id
+   * counter lives in a closure in #initializePage and is intentionally out of
+   * reach here, so reqids stay monotonic and are never reused after a clear.
+   */
+  clear(page: Page): {requestCount: number; reclaimedBytes: number} {
+    const navigations = this.storage.get(page);
+    let requestCount = 0;
+    if (navigations) {
+      for (const bucket of navigations) {
+        requestCount += bucket.length;
+      }
     }
 
-    while (total > MAX_RETAINED_REQUESTS && navigations.length > 1) {
-      const evicted = navigations.pop();
-      if (!evicted) {
-        break;
-      }
-      total -= evicted.length;
-      this.#reclaimResponseBodyBudget(page, evicted);
+    const budget = responseBodyBudget.get(page);
+    const reclaimedBytes = budget?.bytes ?? 0;
+    if (budget) {
+      budget.bytes = 0;
     }
+
+    if (navigations) {
+      navigations.length = 1;
+      navigations[0] = [];
+    }
+    this.#initiators.get(page)?.clear();
+    this.#initiatorsByKey.get(page)?.clear();
+
+    return {requestCount, reclaimedBytes};
   }
 
   #reclaimResponseBodyBudget(page: Page, evicted: HTTPRequest[]): void {

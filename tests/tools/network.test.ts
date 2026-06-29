@@ -19,15 +19,6 @@ test('outputPart defaults to "all" when omitted', () => {
   assert.equal(parsed.outputPart, 'all');
 });
 
-test('includePreservedRequests defaults to true when omitted', () => {
-  // Default true so cross-navigation requests (e.g. the POST that triggered a
-  // redirect) are visible without the AI needing to know the flag.
-  const schema = zod.object(listNetworkRequests.schema);
-  const parsed = schema.parse({});
-
-  assert.equal(parsed.includePreservedRequests, true);
-});
-
 test('methods accepts valid HTTP verbs and rejects unknown ones', () => {
   const schema = zod.object(listNetworkRequests.schema);
 

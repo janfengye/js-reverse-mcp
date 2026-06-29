@@ -59,7 +59,6 @@ export interface Response {
       methods?: string[];
       resourceTypes?: string[];
       urlFilter?: string;
-      includePreservedRequests?: boolean;
       networkRequestIdInDevToolsUI?: number;
     },
   ): void;
@@ -137,6 +136,12 @@ export type Context = Readonly<{
    * Get network request by ID.
    */
   getNetworkRequestById(reqid: number): HTTPRequest;
+  /**
+   * Clear all collected network requests for the selected page, releasing the
+   * cached response-body byte budget and initiator maps. Returns how much was
+   * dropped so the caller can report it.
+   */
+  clearNetworkRequests(): {requestCount: number; reclaimedBytes: number};
   /**
    * Get all WebSocket connections for the selected page.
    */

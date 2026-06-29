@@ -8,12 +8,16 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
 import type {CdpSessionProvider} from '../src/CdpSessionProvider.js';
-import {NetworkCollector} from '../src/PageCollector.js';
+import {NetworkCollector, responseBodyCacheSymbol} from '../src/PageCollector.js';
 import type {
   BrowserContext,
   HTTPRequest,
   Page,
 } from '../src/third_party/index.js';
+
+// Mirror of MAX_RETAINED_REQUESTS in PageCollector.ts (the FIFO cap is module
+// private). Keep in sync if the source constant changes.
+const FIFO_CAP = 1000;
 
 function createFakePage(): {page: Page; mainFrame: object} {
   const listeners = new Map<string, Array<(arg: unknown) => void>>();
@@ -44,6 +48,28 @@ function createFakeRequest(url: string, frame: object): HTTPRequest {
     method: () => 'POST',
     isNavigationRequest: () => false,
     frame: () => frame,
+  } as unknown as HTTPRequest;
+}
+
+// A request whose response body the collector will eagerly cache on
+// 'requestfinished', counting `bodyLen` bytes against the page's body budget.
+// frame().page() returns the page so the budget WeakMap keys correctly.
+function createFakeRequestWithResponse(
+  url: string,
+  page: Page,
+  bodyLen: number,
+): HTTPRequest {
+  const buffer = Buffer.alloc(bodyLen, 0x61);
+  const frame = {page: () => page};
+  return {
+    url: () => url,
+    method: () => 'POST',
+    isNavigationRequest: () => false,
+    frame: () => frame,
+    response: async () => ({
+      headers: () => ({'content-length': String(bodyLen)}),
+      body: async () => buffer,
+    }),
   } as unknown as HTTPRequest;
 }
 
@@ -78,80 +104,133 @@ function createFakeCdpSession() {
 
 const flushMicrotasks = () => new Promise(resolve => setTimeout(resolve, 0));
 
-test('preserved requests survive more than the old navigation window', () => {
-  const collector = createCollector();
-  const {page, mainFrame} = createFakePage();
-  collector.addPage(page);
-
-  // A request that belongs to the current navigation (e.g. the POST that
-  // triggers a redirect). Its frame is not the main frame, so it is never
-  // treated as a navigation request.
-  const subframe = {id: 'sub'};
-  const bundle = createFakeRequest('https://x/assets/js/bundle', subframe);
-  (page as unknown as {emit(e: string, a: unknown): void}).emit(
-    'request',
-    bundle,
-  );
-
-  // Five subsequent main-frame navigations with no captured navigation request
-  // — each pushes an empty bucket, which under the old fixed 4-bucket read
-  // window would evict the bundle request entirely.
-  for (let i = 0; i < 5; i++) {
-    (page as unknown as {emit(e: string, a: unknown): void}).emit(
-      'framenavigated',
-      mainFrame,
-    );
-  }
-
-  const preserved = collector.getData(page, true);
-  assert.ok(
-    preserved.includes(bundle),
-    'preserved view should still reach the bundle request after 5 navigations',
-  );
-
-  const currentOnly = collector.getData(page, false);
-  assert.ok(
-    !currentOnly.includes(bundle),
-    'default view should only show the current navigation',
-  );
-});
-
-test('evicts the oldest requests once past the retention cap', () => {
+test('requests survive navigation (FIFO is navigation-agnostic)', () => {
   const collector = createCollector();
   const {page, mainFrame} = createFakePage();
   collector.addPage(page);
   const emit = (event: string, arg: unknown) =>
     (page as unknown as {emit(e: string, a: unknown): void}).emit(event, arg);
+
+  // A request that already fired (e.g. the POST that triggers a redirect).
   const subframe = {id: 'sub'};
+  const bundle = createFakeRequest('https://x/assets/js/bundle', subframe);
+  emit('request', bundle);
 
-  let firstRoundReq: HTTPRequest | undefined;
-  let lastRoundReq: HTTPRequest | undefined;
-
-  // Six navigations of 1000 requests each = 6000 retained records; the cap is
-  // 5000, so the oldest navigation bucket must be evicted.
-  for (let round = 0; round < 6; round++) {
-    for (let i = 0; i < 1000; i++) {
-      const req = createFakeRequest(`https://x/r${round}-${i}`, subframe);
-      if (round === 0 && i === 0) {
-        firstRoundReq = req;
-      }
-      if (round === 5 && i === 0) {
-        lastRoundReq = req;
-      }
-      emit('request', req);
-    }
+  // Navigation no longer splits or trims the queue, so the request stays
+  // inspectable however many times the main frame navigates afterwards.
+  for (let i = 0; i < 5; i++) {
     emit('framenavigated', mainFrame);
   }
 
-  const all = collector.getData(page, true);
-  assert.equal(all.length, 5000, 'retained records should be capped at 5000');
   assert.ok(
-    !all.includes(firstRoundReq as HTTPRequest),
-    'the oldest navigation bucket should be evicted',
+    collector.getData(page).includes(bundle),
+    'request should stay inspectable after navigations',
+  );
+});
+
+test('evicts the oldest request once past the FIFO cap', () => {
+  const collector = createCollector();
+  const {page} = createFakePage();
+  collector.addPage(page);
+  const emit = (event: string, arg: unknown) =>
+    (page as unknown as {emit(e: string, a: unknown): void}).emit(event, arg);
+  const subframe = {id: 'sub'};
+
+  let firstReq: HTTPRequest | undefined;
+  let lastReq: HTTPRequest | undefined;
+
+  // Emit more than the cap; the oldest beyond the cap roll off, newest stay.
+  const total = FIFO_CAP + 500;
+  for (let i = 0; i < total; i++) {
+    const req = createFakeRequest(`https://x/r${i}`, subframe);
+    if (i === 0) {
+      firstReq = req;
+    }
+    if (i === total - 1) {
+      lastReq = req;
+    }
+    emit('request', req);
+  }
+
+  const all = collector.getData(page);
+  assert.equal(all.length, FIFO_CAP, 'queue should be capped at the FIFO cap');
+  assert.ok(
+    !all.includes(firstReq as HTTPRequest),
+    'the oldest request should be evicted',
   );
   assert.ok(
-    all.includes(lastRoundReq as HTTPRequest),
-    'the newest navigations should be retained',
+    all.includes(lastReq as HTTPRequest),
+    'the newest request should be retained',
+  );
+});
+
+test('clear() empties the queue and reports + releases the body budget', async () => {
+  const collector = createCollector();
+  const {page} = createFakePage();
+  collector.addPage(page);
+  const emit = (event: string, arg: unknown) =>
+    (page as unknown as {emit(e: string, a: unknown): void}).emit(event, arg);
+
+  const req = createFakeRequestWithResponse('https://x/api', page, 1234);
+  emit('request', req);
+  emit('requestfinished', req);
+  // Wait for the eager body capture (fire-and-forget) to count its bytes.
+  await (req as unknown as {[responseBodyCacheSymbol]: Promise<unknown>})[
+    responseBodyCacheSymbol
+  ];
+
+  const result = collector.clear(page);
+  assert.equal(result.requestCount, 1, 'should report the cleared request count');
+  assert.equal(
+    result.reclaimedBytes,
+    1234,
+    'should report the released body budget',
+  );
+  assert.equal(
+    collector.getData(page).length,
+    0,
+    'queue should be empty after clear',
+  );
+});
+
+test('FIFO eviction reclaims the evicted request body budget (no ratchet)', async () => {
+  const collector = createCollector();
+  const {page} = createFakePage();
+  collector.addPage(page);
+  const emit = (event: string, arg: unknown) =>
+    (page as unknown as {emit(e: string, a: unknown): void}).emit(event, arg);
+  const subframe = {id: 'sub'};
+
+  // A request with a cached 1000-byte body, counted against the budget.
+  const withBody = createFakeRequestWithResponse('https://x/r0', page, 1000);
+  emit('request', withBody);
+  emit('requestfinished', withBody);
+  await (withBody as unknown as {[responseBodyCacheSymbol]: Promise<unknown>})[
+    responseBodyCacheSymbol
+  ];
+
+  // Push exactly FIFO_CAP more requests so the body request rolls off the tail.
+  for (let i = 0; i < FIFO_CAP; i++) {
+    emit('request', createFakeRequest(`https://x/d${i}`, subframe));
+  }
+  assert.ok(
+    !collector.getData(page).includes(withBody),
+    'the body request should have been evicted',
+  );
+
+  // A new request adds 50 bytes. If eviction reclaimed the 1000 bytes, the
+  // budget now holds only these 50; if it ratcheted, it would hold 1050.
+  const newBody = createFakeRequestWithResponse('https://x/rn', page, 50);
+  emit('request', newBody);
+  emit('requestfinished', newBody);
+  await (newBody as unknown as {[responseBodyCacheSymbol]: Promise<unknown>})[
+    responseBodyCacheSymbol
+  ];
+
+  assert.equal(
+    collector.clear(page).reclaimedBytes,
+    50,
+    'evicted request bytes must be reclaimed, not ratcheted',
   );
 });
 

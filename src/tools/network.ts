@@ -57,7 +57,7 @@ const NETWORK_EXPORT_PARTS = [
 
 export const listNetworkRequests = defineTool({
   name: 'list_network_requests',
-  description: `List network requests for the currently selected page. By default this includes requests retained from before the current navigation (set includePreservedRequests=false to limit to the current navigation only). Results are sorted newest-first and include request start time plus duration. By default returns the 20 most recent requests; use pageSize/pageIdx to paginate. Narrow the list with filters: methods (HTTP verb, e.g. ["POST"] to find form/credential/signature submissions), resourceTypes (resource category such as xhr/fetch/document — NOT the HTTP verb), and urlFilter (URL substring). Filters combine with AND; multiple values within one filter combine with OR. List output is an index: it shows status, summarized long URLs, and Set-Cookie names, not header/body contents. Pass reqid to inspect one request with timing, bounded inline headers where sensitive values such as Cookie, Authorization, and token-like headers are redacted, content-type-aware body previews, and a dedicated Set-Cookie section that shows raw values up to 1KB total. When exact bytes, full bodies, replay inputs, signature inputs, large request bodies, long GET query payloads, binary responses, full headers, full Set-Cookie values, or data for external decoding are needed, pass reqid with outputFile to export the selected data. For GET requests, payload-like data means parsed URL query parameters.`,
+  description: `List network requests for the currently selected page. Requests are held in a flat FIFO queue that is not cleared on navigation, so a request that already fired (e.g. a login POST that caused a redirect, or a pre-redirect beacon) stays inspectable after the page moves on; the queue keeps the most recent 1000 requests and the oldest roll off. To establish a clean baseline before the action you want to study (the DevTools "clear, then act" workflow), call clear_network_requests first. Results are sorted newest-first and include request start time plus duration. By default returns the 20 most recent requests; use pageSize/pageIdx to paginate. Narrow the list with filters: methods (HTTP verb, e.g. ["POST"] to find form/credential/signature submissions), resourceTypes (resource category such as xhr/fetch/document — NOT the HTTP verb), and urlFilter (URL substring). Filters combine with AND; multiple values within one filter combine with OR. List output is an index: it shows status, summarized long URLs, and Set-Cookie names, not header/body contents. Pass reqid to inspect one request with timing, bounded inline headers where sensitive values such as Cookie, Authorization, and token-like headers are redacted, content-type-aware body previews, and a dedicated Set-Cookie section that shows raw values up to 1KB total. When exact bytes, full bodies, replay inputs, signature inputs, large request bodies, long GET query payloads, binary responses, full headers, full Set-Cookie values, or data for external decoding are needed, pass reqid with outputFile to export the selected data. For GET requests, payload-like data means parsed URL query parameters.`,
   annotations: {
     category: ToolCategory.NETWORK,
     // Not read-only due to outputFile export support.
@@ -101,12 +101,6 @@ export const listNetworkRequests = defineTool({
       .optional()
       .describe(
         'Filter requests by URL. Only requests containing this substring will be returned.',
-      ),
-    includePreservedRequests: zod
-      .boolean()
-      .default(true)
-      .describe(
-        'When true (the default), include requests retained from before the current navigation — so the request that triggered a navigation (e.g. a login POST that caused a redirect, or a pre-redirect beacon) stays visible after the page has moved on. Set to false to limit the list to the current navigation only, for a cleaner view of what is happening right now. Retained requests are bounded by a recency cap, so the very oldest may roll off on long sessions.',
       ),
     outputFile: zod
       .string()
@@ -162,8 +156,32 @@ export const listNetworkRequests = defineTool({
       methods: request.params.methods,
       resourceTypes: request.params.resourceTypes,
       urlFilter: request.params.urlFilter,
-      includePreservedRequests: request.params.includePreservedRequests,
       networkRequestIdInDevToolsUI: reqid,
     });
+  },
+});
+
+export const clearNetworkRequests = defineTool({
+  name: 'clear_network_requests',
+  description: `Clear all collected network requests for the currently selected page, to establish a clean baseline before the action you want to study (the DevTools "clear, then act" workflow). This drops the in-memory request queue, releases the cached response-body byte budget, and clears the request initiator (call stack) maps for the page. It does not touch the browser, cookies, HTTP cache, storage, console, WebSocket messages, or any other page — use clear_site_data for browser state. reqids are not reused after clearing; newly collected requests continue from the previous high-water mark.`,
+  annotations: {
+    category: ToolCategory.NETWORK,
+    readOnlyHint: false,
+  },
+  schema: {},
+  handler: async (_request, response, context) => {
+    const {requestCount, reclaimedBytes} = context.clearNetworkRequests();
+    response.appendResponseLine(
+      `Cleared ${requestCount} network request${
+        requestCount === 1 ? '' : 's'
+      } for the selected page.`,
+    );
+    response.appendResponseLine(
+      `Released ${reclaimedBytes} bytes of cached response bodies.`,
+    );
+    response.appendResponseLine('Request initiator data cleared.');
+    response.appendResponseLine(
+      'reqids are not reused — newly collected requests continue from the previous high-water mark.',
+    );
   },
 });

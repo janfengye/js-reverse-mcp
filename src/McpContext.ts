@@ -255,9 +255,14 @@ export class McpContext implements Context {
     return this.#networkCollector.getIdForResource(request);
   }
 
-  getNetworkRequests(includePreservedRequests?: boolean): HTTPRequest[] {
+  getNetworkRequests(): HTTPRequest[] {
     const page = this.getSelectedPage();
-    return this.#networkCollector.getData(page, includePreservedRequests);
+    return this.#networkCollector.getData(page);
+  }
+
+  clearNetworkRequests(): {requestCount: number; reclaimedBytes: number} {
+    const page = this.getSelectedPage();
+    return this.#networkCollector.clear(page);
   }
 
   getConsoleData(

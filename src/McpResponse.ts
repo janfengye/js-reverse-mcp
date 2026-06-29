@@ -56,7 +56,6 @@ export class McpResponse implements Response {
     methods?: string[];
     resourceTypes?: string[];
     urlFilter?: string;
-    includePreservedRequests?: boolean;
     networkRequestIdInDevToolsUI?: number;
   };
   #consoleDataOptions?: {
@@ -83,7 +82,6 @@ export class McpResponse implements Response {
       methods?: string[];
       resourceTypes?: string[];
       urlFilter?: string;
-      includePreservedRequests?: boolean;
       networkRequestIdInDevToolsUI?: number;
     },
   ): void {
@@ -104,7 +102,6 @@ export class McpResponse implements Response {
       methods: options?.methods,
       resourceTypes: options?.resourceTypes,
       urlFilter: options?.urlFilter,
-      includePreservedRequests: options?.includePreservedRequests,
       networkRequestIdInDevToolsUI: options?.networkRequestIdInDevToolsUI,
     };
   }
@@ -407,9 +404,7 @@ export class McpResponse implements Response {
     response.push(...this.#formatConsoleData(data.consoleData));
 
     if (this.#networkRequestsOptions?.include) {
-      let requests = context.getNetworkRequests(
-        this.#networkRequestsOptions?.includePreservedRequests,
-      );
+      let requests = context.getNetworkRequests();
 
       // Apply HTTP method filtering if specified (case-insensitive)
       if (this.#networkRequestsOptions.methods?.length) {

@@ -27,6 +27,8 @@ import {
   getResponseHeadersArray,
   getShortDescriptionForRequestAsync,
   getSetCookieHeaders,
+  getSetCookieFlowRequestLine,
+  getSetCookieFlowValues,
   getStatusFromRequestAsync,
   isRequestPending,
 } from './formatters/networkFormatter.js';
@@ -56,6 +58,7 @@ export class McpResponse implements Response {
     methods?: string[];
     resourceTypes?: string[];
     urlFilter?: string;
+    cookieName?: string;
     networkRequestIdInDevToolsUI?: number;
   };
   #consoleDataOptions?: {
@@ -82,6 +85,7 @@ export class McpResponse implements Response {
       methods?: string[];
       resourceTypes?: string[];
       urlFilter?: string;
+      cookieName?: string;
       networkRequestIdInDevToolsUI?: number;
     },
   ): void {
@@ -102,6 +106,7 @@ export class McpResponse implements Response {
       methods: options?.methods,
       resourceTypes: options?.resourceTypes,
       urlFilter: options?.urlFilter,
+      cookieName: options?.cookieName,
       networkRequestIdInDevToolsUI: options?.networkRequestIdInDevToolsUI,
     };
   }
@@ -438,29 +443,78 @@ export class McpResponse implements Response {
         );
       }
 
-      // Show newest requests first
-      requests.reverse();
-
-      response.push('## Network requests');
-      if (requests.length) {
-        const data = this.#dataWithPagination(
-          requests,
-          this.#networkRequestsOptions.pagination ?? {pageSize: 20, pageIdx: 0},
-        );
-        response.push(...data.info);
-        for (const request of data.items) {
-          response.push(
-            await getShortDescriptionForRequestAsync(
+      const cookieName = this.#networkRequestsOptions.cookieName;
+      if (cookieName) {
+        const flowEntries = (
+          await Promise.all(
+            requests.map(async request => ({
               request,
-              context.getNetworkRequestStableId(request),
-              context.getNetworkRequestStableId(request) ===
-                this.#networkRequestsOptions?.networkRequestIdInDevToolsUI,
-              true,
-            ),
+              setCookieValues: await getSetCookieFlowValues(
+                request,
+                cookieName,
+              ),
+            })),
+          )
+        ).filter(({setCookieValues}) => setCookieValues.length);
+
+        response.push(`## Set-Cookie flow for ${cookieName}`);
+        response.push('Matched response Set-Cookie updates, oldest first.');
+        response.push(
+          'Pagination ignored: Set-Cookie flow shows all matching updates in the current captured queue.',
+        );
+        response.push(
+          'Coverage: current captured network queue only; earlier updates may be missing if capture started late or the FIFO queue rolled over.',
+        );
+        if (flowEntries.length) {
+          const updateLabel =
+            flowEntries.length === 1 ? 'request update' : 'request updates';
+          response.push(`${flowEntries.length} ${updateLabel}`);
+          for (const {request, setCookieValues} of flowEntries) {
+            response.push(
+              await getSetCookieFlowRequestLine(
+                request,
+                context.getNetworkRequestStableId(request),
+                context.getNetworkRequestStableId(request) ===
+                  this.#networkRequestsOptions?.networkRequestIdInDevToolsUI,
+              ),
+            );
+            for (const setCookieValue of setCookieValues) {
+              response.push(`set-cookie: ${setCookieValue}`);
+            }
+          }
+        } else {
+          response.push(
+            'No Set-Cookie updates found for this cookie in the current captured network queue.',
           );
         }
       } else {
-        response.push('No requests found.');
+        // Show newest requests first
+        requests.reverse();
+
+        response.push('## Network requests');
+        if (requests.length) {
+          const data = this.#dataWithPagination(
+            requests,
+            this.#networkRequestsOptions.pagination ?? {
+              pageSize: 20,
+              pageIdx: 0,
+            },
+          );
+          response.push(...data.info);
+          for (const request of data.items) {
+            response.push(
+              await getShortDescriptionForRequestAsync(
+                request,
+                context.getNetworkRequestStableId(request),
+                context.getNetworkRequestStableId(request) ===
+                  this.#networkRequestsOptions?.networkRequestIdInDevToolsUI,
+                true,
+              ),
+            );
+          }
+        } else {
+          response.push('No requests found.');
+        }
       }
     }
 

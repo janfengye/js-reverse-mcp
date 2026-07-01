@@ -11,6 +11,8 @@ import {
   exportNetworkRequestPart,
   getFormattedHeaderEntries,
   getFormattedResponseBody,
+  getFormattedSetCookieEntries,
+  getSetCookieFlowValues,
   getShortDescriptionForRequestAsync,
   getStatusFromRequestAsync,
   headersContainSensitiveValues,
@@ -52,6 +54,36 @@ test('does not treat Set-Cookie as a redacted generic header', () => {
     headersContainSensitiveValues([{name: 'Set-Cookie', value: 'sid=abc'}]),
     false,
   );
+});
+
+test('formats Set-Cookie entries as name=value and omits long values', () => {
+  const longValue = 'x'.repeat(513);
+
+  assert.deepEqual(
+    getFormattedSetCookieEntries([
+      'sid=abc123; Path=/; HttpOnly',
+      `risk=${longValue}; Path=/; Secure`,
+    ]),
+    ['2 entries', '- sid=abc123', '- risk=<omitted; value length 513 chars>'],
+  );
+});
+
+test('extracts target Set-Cookie flow values from response headers only', async () => {
+  const longValue = 'x'.repeat(513);
+  const request = createCookieRequest({
+    requestCookie: '_abck=request-value; theme=light',
+    setCookieHeaders: [
+      '_abck=first; Path=/',
+      'sid=def; Path=/',
+      `_abck=${longValue}; Path=/; Secure`,
+    ],
+  });
+
+  assert.deepEqual(await getSetCookieFlowValues(request, '_abck'), [
+    '_abck=first',
+    '_abck=<omitted; value length 513 chars>',
+  ]);
+  assert.deepEqual(await getSetCookieFlowValues(request, 'theme'), []);
 });
 
 test('formats pending request list entries without waiting for a response', async () => {
@@ -217,5 +249,46 @@ function createPendingRequest(): HTTPRequest {
       responseEnd: -1,
     }),
     url: () => 'https://example.test/api?a=1',
+  } as unknown as HTTPRequest;
+}
+
+function createCookieRequest(opts: {
+  requestCookie?: string;
+  setCookieHeaders?: string[];
+}): HTTPRequest {
+  const requestHeaders = opts.requestCookie
+    ? [{name: 'Cookie', value: opts.requestCookie}]
+    : [];
+  const responseHeaders = (opts.setCookieHeaders ?? []).map(value => ({
+    name: 'Set-Cookie',
+    value,
+  }));
+
+  const response = {
+    headers: () => ({}),
+    headersArray: async () => responseHeaders,
+    status: () => 200,
+    statusText: () => 'OK',
+  } as unknown as HTTPResponse;
+
+  return {
+    failure: () => null,
+    headers: () => (opts.requestCookie ? {cookie: opts.requestCookie} : {}),
+    headersArray: async () => requestHeaders,
+    method: () => 'GET',
+    resourceType: () => 'xhr',
+    response: async () => response,
+    timing: () => ({
+      startTime: 0,
+      domainLookupStart: -1,
+      domainLookupEnd: -1,
+      connectStart: -1,
+      secureConnectionStart: -1,
+      connectEnd: -1,
+      requestStart: 1,
+      responseStart: 2,
+      responseEnd: 3,
+    }),
+    url: () => 'https://example.test/api',
   } as unknown as HTTPRequest;
 }

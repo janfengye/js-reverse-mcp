@@ -59,6 +59,7 @@ export interface Response {
       methods?: string[];
       resourceTypes?: string[];
       urlFilter?: string;
+      cookieName?: string;
       networkRequestIdInDevToolsUI?: number;
     },
   ): void;

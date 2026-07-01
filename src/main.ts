@@ -9,7 +9,11 @@ import './polyfill.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import {ensureBrowserConnected, ensureBrowserLaunched} from './browser.js';
+import {
+  closeBrowser,
+  ensureBrowserConnected,
+  ensureBrowserLaunched,
+} from './browser.js';
 import type {BrowserResult} from './browser.js';
 import {parseArguments} from './cli.js';
 import {features} from './features.js';
@@ -66,7 +70,7 @@ server.server.setRequestHandler(SetLevelRequestSchema, () => {
   return {};
 });
 
-let context: McpContext;
+let context: McpContext | undefined;
 
 // No JS-level init scripts — Patchright's protocol-layer stealth handles
 // automation signal suppression. JS patches (Error.prepareStackTrace, screen
@@ -89,6 +93,7 @@ async function getContext(): Promise<McpContext> {
   }
 
   if (!context || context.browserContext !== result.context) {
+    context?.dispose();
     context = await McpContext.from(result.context, logger);
   }
   return context;
@@ -104,6 +109,7 @@ Avoid sharing sensitive or personal information that you do not want to share wi
 
 const toolMutex = new Mutex();
 const DEFAULT_TOOL_TIMEOUT_MS = 35_000;
+const SHUTDOWN_TIMEOUT_MS = 5_000;
 
 function getErrorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -233,6 +239,95 @@ tools.sort((a, b) => {
   return a.name.localeCompare(b.name);
 });
 
+let shuttingDown = false;
+
+function requestShutdown(reason: string, exitCode: number): void {
+  void shutdown(reason, exitCode);
+}
+
+async function shutdown(reason: string, exitCode: number): Promise<void> {
+  if (shuttingDown) {
+    return;
+  }
+  shuttingDown = true;
+  logger(`Shutdown requested: ${reason}`);
+
+  await withShutdownTimeout(
+    (async () => {
+      context?.dispose();
+      context = undefined;
+
+      await closeBrowser(reason);
+
+      await server.close().catch(error => {
+        logger('Failed to close MCP server during shutdown', error);
+      });
+
+      await closeLogFile();
+    })(),
+    reason,
+  );
+
+  process.exit(exitCode);
+}
+
+async function withShutdownTimeout(
+  promise: Promise<void>,
+  reason: string,
+): Promise<void> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<void>(resolve => {
+    timeoutId = setTimeout(() => {
+      logger(
+        `Shutdown cleanup timed out after ${SHUTDOWN_TIMEOUT_MS}ms: ${reason}`,
+      );
+      resolve();
+    }, SHUTDOWN_TIMEOUT_MS);
+  });
+
+  await Promise.race([promise, timeout]);
+  if (timeoutId) {
+    clearTimeout(timeoutId);
+  }
+}
+
+function closeLogFile(): Promise<void> {
+  if (!logFile || logFile.destroyed || logFile.writableEnded) {
+    return Promise.resolve();
+  }
+
+  return new Promise(resolve => {
+    logFile.end(resolve);
+  });
+}
+
+function getStreamErrorCode(error: unknown): string | undefined {
+  return typeof error === 'object' && error !== null && 'code' in error
+    ? String(error.code)
+    : undefined;
+}
+
+process.on('SIGINT', () => requestShutdown('SIGINT', 130));
+process.on('SIGTERM', () => requestShutdown('SIGTERM', 143));
+process.on('SIGHUP', () => requestShutdown('SIGHUP', 129));
+process.on('disconnect', () => requestShutdown('process disconnect', 0));
+
+process.stdin.on('end', () => requestShutdown('stdin end', 0));
+process.stdin.on('close', () => requestShutdown('stdin close', 0));
+process.stdin.on('error', error => {
+  requestShutdown(`stdin error: ${getErrorText(error)}`, 1);
+});
+
+process.stdout.on('error', error => {
+  const code = getStreamErrorCode(error);
+  requestShutdown(
+    code === 'EPIPE' || code === 'ECONNRESET'
+      ? `stdout ${code}`
+      : `stdout error: ${getErrorText(error)}`,
+    code === 'EPIPE' || code === 'ECONNRESET' ? 0 : 1,
+  );
+});
+
 for (const tool of tools) {
   registerTool(tool);
 }
@@ -240,6 +335,7 @@ for (const tool of tools) {
 if (features.issues) {
   await loadIssueDescriptions();
 }
+
 const transport = new StdioServerTransport();
 await server.connect(transport);
 logger('Chrome DevTools MCP Server connected');

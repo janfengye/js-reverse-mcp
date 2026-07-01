@@ -34,3 +34,17 @@ test('methods is unset when omitted (no filtering)', () => {
 
   assert.equal(parsed.methods, undefined);
 });
+
+test('cookieName trims input and enters Set-Cookie flow mode', () => {
+  const schema = zod.object(listNetworkRequests.schema);
+  const parsed = schema.parse({cookieName: ' _abck '});
+
+  assert.equal(parsed.cookieName, '_abck');
+  assert.equal('cookieRelation' in listNetworkRequests.schema, false);
+});
+
+test('cookieName rejects blank input', () => {
+  const schema = zod.object(listNetworkRequests.schema);
+
+  assert.throws(() => schema.parse({cookieName: '   '}));
+});

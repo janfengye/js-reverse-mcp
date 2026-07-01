@@ -22,7 +22,7 @@ const LIST_SET_COOKIE_NAME_LIMIT = 5;
 const LIST_URL_CONTEXT_LIMIT = 240;
 const LONG_URL_LIMIT = 2000;
 const LONG_QUERY_LIMIT = 1000;
-const SET_COOKIE_CONTEXT_SIZE_LIMIT = 1024;
+const SET_COOKIE_VALUE_INLINE_LIMIT = 512;
 const COOKIE_HEADER_NAME_LIMIT = 10;
 
 const SENSITIVE_HEADER_EXACT_NAMES = new Set([
@@ -164,16 +164,17 @@ export async function getShortDescriptionForRequestAsync(
   id: number,
   selectedInDevToolsUI = false,
   includeSetCookieMarker = false,
+  extraMarker = '',
 ): Promise<string> {
   if (!hasFinishedOrFailed(request)) {
-    return `reqid=${id} ${getFormattedRequestTimingBrief(request)} [${request.resourceType()}] ${request.method()} ${getUrlForList(request.url())} ${getPendingRequestStatus()}${selectedInDevToolsUI ? ` [selected in the DevTools Network panel]` : ''}`;
+    return `reqid=${id} ${getFormattedRequestTimingBrief(request)} [${request.resourceType()}] ${request.method()} ${getUrlForList(request.url())} ${getPendingRequestStatus()}${extraMarker}${selectedInDevToolsUI ? ` [selected in the DevTools Network panel]` : ''}`;
   }
 
   const status = await getStatusFromRequestAsync(request);
   const setCookieMarker = includeSetCookieMarker
     ? await getSetCookieListMarker(request)
     : '';
-  return `reqid=${id} ${getFormattedRequestTimingBrief(request)} [${request.resourceType()}] ${request.method()} ${getUrlForList(request.url())} ${status}${setCookieMarker}${selectedInDevToolsUI ? ` [selected in the DevTools Network panel]` : ''}`;
+  return `reqid=${id} ${getFormattedRequestTimingBrief(request)} [${request.resourceType()}] ${request.method()} ${getUrlForList(request.url())} ${status}${setCookieMarker}${extraMarker}${selectedInDevToolsUI ? ` [selected in the DevTools Network panel]` : ''}`;
 }
 
 function hasFinishedOrFailed(request: HTTPRequest): boolean {
@@ -311,11 +312,23 @@ export function getFormattedHeaderEntries(
 export function getFormattedSetCookieEntries(
   setCookieHeaders: string[],
 ): string[] {
-  return getSizeLimitedLines(
-    setCookieHeaders.map(value => `- ${value}`),
-    SET_COOKIE_CONTEXT_SIZE_LIMIT,
-    'Set-Cookie entries',
-  );
+  const entryLabel = setCookieHeaders.length === 1 ? 'entry' : 'entries';
+  return [
+    `${setCookieHeaders.length} ${entryLabel}`,
+    ...setCookieHeaders.map(header => `- ${formatSetCookieNameValue(header)}`),
+  ];
+}
+
+export async function getSetCookieFlowRequestLine(
+  request: HTTPRequest,
+  id: number,
+  selectedInDevToolsUI = false,
+): Promise<string> {
+  const httpResponse = await getResponseIfCompleted(request);
+  const status = httpResponse
+    ? String(httpResponse.status())
+    : await getStatusFromRequestAsync(request);
+  return `[${id}] ${status} ${request.method()} ${getUrlForList(request.url())}${selectedInDevToolsUI ? ` [selected in the DevTools Network panel]` : ''}`;
 }
 
 export async function getFormattedResponseBody(
@@ -521,12 +534,15 @@ export async function getNetworkRequestExportHints(
       );
     }
 
-    if (
-      headersWillBeTruncated(responseHeadersWithoutSetCookie) ||
-      setCookiesWillBeTruncated(setCookieHeaders)
-    ) {
+    if (headersWillBeTruncated(responseHeadersWithoutSetCookie)) {
       hints.push(
-        `Response headers are truncated inline. For exact response headers and Set-Cookie values, re-run with outputPart="responseHeaders" and outputFile="network-req-${reqid}-response-headers.json".`,
+        `Response headers are truncated inline. For exact response headers, re-run with outputPart="responseHeaders" and outputFile="network-req-${reqid}-response-headers.json".`,
+      );
+    }
+
+    if (setCookieValuesWillBeOmitted(setCookieHeaders)) {
+      hints.push(
+        `Some Set-Cookie values are omitted inline because they exceed ${SET_COOKIE_VALUE_INLINE_LIMIT} chars. For exact Set-Cookie values, re-run with outputPart="responseHeaders" and outputFile="network-req-${reqid}-response-headers.json".`,
       );
     }
 
@@ -840,10 +856,11 @@ function headersWillBeTruncated(headers: HeaderEntry[]): boolean {
   return headerLinesSize(headers) > HEADER_CONTEXT_SIZE_LIMIT;
 }
 
-function setCookiesWillBeTruncated(setCookieHeaders: string[]): boolean {
-  return (
-    setCookieHeaders.map(value => `- ${value}`).join('\n').length >
-    SET_COOKIE_CONTEXT_SIZE_LIMIT
+function setCookieValuesWillBeOmitted(setCookieHeaders: string[]): boolean {
+  return setCookieHeaders.some(
+    header =>
+      (parseSetCookieNameValue(header)?.value.length ?? 0) >
+      SET_COOKIE_VALUE_INLINE_LIMIT,
   );
 }
 
@@ -1045,11 +1062,72 @@ async function getSetCookieListMarker(request: HTTPRequest): Promise<string> {
 }
 
 function getSetCookieName(setCookieHeader: string): string {
-  const eq = setCookieHeader.indexOf('=');
-  if (eq <= 0) {
-    return '<unnamed>';
+  return parseSetCookieNameValue(setCookieHeader)?.name ?? '<unnamed>';
+}
+
+export async function getSetCookieFlowValues(
+  request: HTTPRequest,
+  cookieName: string,
+): Promise<string[]> {
+  const httpResponse = await getResponseIfCompleted(request);
+  if (!httpResponse) {
+    return [];
   }
-  return setCookieHeader.slice(0, eq).trim() || '<unnamed>';
+
+  const responseHeaders = await getResponseHeadersArray(httpResponse).catch(
+    () => [],
+  );
+  return getSetCookieHeaders(responseHeaders)
+    .map(parseSetCookieNameValue)
+    .filter(
+      (parsed): parsed is {name: string; value: string} =>
+        parsed?.name === cookieName,
+    )
+    .map(parsed => formatSetCookieNameValueFromParsed(parsed));
+}
+
+function formatSetCookieNameValue(setCookieHeader: string): string {
+  const parsed = parseSetCookieNameValue(setCookieHeader);
+  if (!parsed) {
+    return `<unparseable Set-Cookie; ${setCookieHeader.length} chars>`;
+  }
+
+  return formatSetCookieNameValueFromParsed(parsed);
+}
+
+function formatSetCookieNameValueFromParsed(parsed: {
+  name: string;
+  value: string;
+}): string {
+  if (parsed.value.length <= SET_COOKIE_VALUE_INLINE_LIMIT) {
+    return `${parsed.name}=${parsed.value}`;
+  }
+
+  return `${parsed.name}=<omitted; value length ${parsed.value.length} chars>`;
+}
+
+function parseSetCookieNameValue(
+  setCookieHeader: string,
+): {name: string; value: string} | undefined {
+  const attributeStart = setCookieHeader.indexOf(';');
+  const nameValue =
+    attributeStart === -1
+      ? setCookieHeader
+      : setCookieHeader.slice(0, attributeStart);
+  const eq = nameValue.indexOf('=');
+  if (eq <= 0) {
+    return;
+  }
+
+  const name = nameValue.slice(0, eq).trim();
+  if (!name) {
+    return;
+  }
+
+  return {
+    name,
+    value: nameValue.slice(eq + 1).trim(),
+  };
 }
 
 type RequestWithBodyCache = HTTPRequest & {

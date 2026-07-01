@@ -13,12 +13,18 @@ import {logger} from './logger.js';
 import type {Browser, BrowserContext} from './third_party/index.js';
 import {chromium} from './third_party/index.js';
 
+type BrowserCloseMode = 'connected-cdp' | 'launched' | 'persistent-context';
+
 export interface BrowserResult {
   browser: Browser | undefined;
   context: BrowserContext;
+  closeMode: BrowserCloseMode;
 }
 
 let browserResult: BrowserResult | undefined;
+
+const BROWSER_OCCUPIED_MESSAGE =
+  'The MCP browser is currently occupied by another session. Ask the user to close the other MCP/browser debugging window, or start a separate session with --isolated or a different --browserUrl.';
 
 // Persistent user data directories.
 //
@@ -61,7 +67,18 @@ export async function ensureBrowserConnected(options: {
   const endpoint = json.webSocketDebuggerUrl;
 
   logger('Connecting Patchright via CDP to', endpoint);
-  const browser = await chromium.connectOverCDP(endpoint);
+  let browser: Browser;
+  try {
+    browser = await chromium.connectOverCDP(endpoint);
+  } catch (error) {
+    if (isBrowserOccupiedError(error)) {
+      throw new Error(
+        `${BROWSER_OCCUPIED_MESSAGE} The CDP endpoint ${options.browserURL} appears to be in use.`,
+        {cause: error},
+      );
+    }
+    throw error;
+  }
   logger('Connected Patchright');
 
   const context = browser.contexts()[0];
@@ -69,7 +86,7 @@ export async function ensureBrowserConnected(options: {
     throw new Error('No browser context found after connecting');
   }
 
-  browserResult = {browser, context};
+  browserResult = {browser, context, closeMode: 'connected-cdp'};
 
   // Clear cached result when browser disconnects so we can reconnect.
   browser.on('disconnected', () => {
@@ -151,7 +168,7 @@ export async function launch(
       await context.newPage();
     }
 
-    return {browser, context};
+    return {browser, context, closeMode: 'launched'};
   }
 
   // Default: launchPersistentContext for full state persistence
@@ -169,11 +186,11 @@ export async function launch(
       ...contextOptions,
     });
 
-    return {browser: undefined, context};
+    return {browser: undefined, context, closeMode: 'persistent-context'};
   } catch (error) {
-    if ((error as Error).message.includes('The browser is already running')) {
+    if (isBrowserOccupiedError(error)) {
       throw new Error(
-        `The browser is already running for ${userDataDir}. Use --isolated to run a separate browser instance.`,
+        `${BROWSER_OCCUPIED_MESSAGE} The persistent browser profile is already in use: ${userDataDir}.`,
         {cause: error},
       );
     }
@@ -205,4 +222,69 @@ export async function ensureBrowserLaunched(
   }
 
   return browserResult;
+}
+
+function isBrowserOccupiedError(error: unknown): boolean {
+  const message = (
+    error instanceof Error ? error.message : String(error)
+  ).toLowerCase();
+  return [
+    'the browser is already running',
+    'processsingleton',
+    'another cdp client already connected',
+    'already connected',
+    'already attached',
+    'already in use',
+  ].some(fragment => message.includes(fragment));
+}
+
+export async function closeBrowser(reason: string): Promise<void> {
+  const result = browserResult;
+  if (!result) {
+    return;
+  }
+  browserResult = undefined;
+
+  const closeReason = `MCP shutdown: ${reason}`;
+  logger('Closing browser due to', closeReason);
+
+  if (result.closeMode === 'connected-cdp' && result.browser) {
+    await closeConnectedCdpBrowser(result.browser, closeReason);
+    return;
+  }
+
+  if (result.closeMode === 'launched' && result.browser) {
+    await result.context.close({reason: closeReason}).catch(error => {
+      logger('Failed to close browser context during shutdown', error);
+    });
+    await result.browser.close({reason: closeReason}).catch(error => {
+      logger('Failed to close browser during shutdown', error);
+    });
+    return;
+  }
+
+  await result.context.close({reason: closeReason}).catch(error => {
+    logger('Failed to close persistent browser context during shutdown', error);
+  });
+}
+
+async function closeConnectedCdpBrowser(
+  browser: Browser,
+  reason: string,
+): Promise<void> {
+  if (browser.isConnected()) {
+    try {
+      const session = await browser.newBrowserCDPSession();
+      await session.send('Browser.close');
+    } catch (error) {
+      logger('Failed to send Browser.close over CDP during shutdown', error);
+    }
+  }
+
+  await browser.close({reason}).catch(error => {
+    logger(
+      'Failed to close connected browser transport during shutdown',
+      error,
+    );
+  });
 }

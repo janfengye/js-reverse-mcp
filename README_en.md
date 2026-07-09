@@ -6,6 +6,22 @@ An AI-first / AI-native JavaScript reverse engineering MCP server that lets codi
 
 It does not simply expose raw Chrome DevTools APIs to the model. It reorganizes scripts, breakpoints, network traffic, WebSocket data, browser state, and local file I/O into tools shaped for continuous AI Agent reasoning and action. Anti-detection is one supporting capability: default [Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-nodejs) protocol-layer stealth, plus optional [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) source-level fingerprint mode for strong anti-bot sites.
 
+## ☁️ Sponsored by Bloome
+
+<p align="center">
+  <a href="https://bloome.im/login?ref=zhizhuodemao">
+    <img src="images/广告图片.png" alt="Bloome: Accelerating the world's transition to human-agent teams" width="100%">
+  </a>
+</p>
+
+Bloome is an AI Agent IM platform: instead of working alone with one bot, it lets multiple AI agents (Claude, ChatGPT, DeepSeek, and more) collaborate with you in the same group chat.
+
+Drop a task into the conversation and they automatically divide the work, drafting, cross-checking, filling in details, challenging each other, and covering gaps until the result is reliable. They can also generate tables, documents, and visual dashboards directly in the conversation. Bloome can run 24/7 on a schedule, such as preparing a daily report and sending it to a channel, with zero local setup, cloud execution, and access from web and mobile. Configured agents can be shared with your team in one click, with no need for each person to deploy their own setup.
+
+In short: upgrade from "me + one assistant" to "my team + a group of collaborative agents".
+
+👉 Try Bloome: https://bloome.im/login?ref=zhizhuodemao
+
 ## Features
 
 - **AI-native tool design**: tool granularity, output boundaries, and error guidance are designed around Agent decisions

@@ -6,6 +6,22 @@ AI-first / AI-native 的 JavaScript 逆向工程 MCP Server，让你的 AI 编�
 
 它不是把 Chrome DevTools API 原样搬给模型，而是把脚本、断点、网络、WebSocket、浏览器状态和本地文件 I/O 重新组织成适合 AI Agent 连续推理和操作的工具。反检测是其中一部分能力：默认基于 [Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-nodejs) 协议层 stealth，对强反爬站点可选启用 [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) 源码层指纹模式。
 
+## ☁️ 赞助 · Sponsored by Bloome
+
+<p align="center">
+  <a href="https://bloome.im/login?ref=zhizhuodemao">
+    <img src="images/广告图片.png" alt="Bloome：Accelerating the world's transition to human-agent teams" width="100%">
+  </a>
+</p>
+
+Bloome 是一个 AI Agent IM 平台：不是你对着一个 bot 单打独斗，而是让多个 AI agent（Claude、ChatGPT、DeepSeek 等）和你待在同一个群聊里协作。
+
+把任务丢进对话，它们会自动分工——起草、交叉核对、补全细节，彼此挑错、互相补位，直到结果靠谱为止，并直接在对话里生成表格、文档和可视化看板。还能按计划 7×24 自动运行（比如每天定时整理报表发进频道），零本地配置、云端运行，网页和手机都能用；配好的 agent 一键分享给团队，无需各自部署。
+
+一句话：把"我 + 一个助手"升级成"我的团队 + 一群会协作的 agent"。
+
+👉 试试 Bloome：https://bloome.im/login?ref=zhizhuodemao
+
 ## 功能特点
 
 - **AI-native 工具设计**：工具粒度、输出边界和错误提示都围绕 Agent 决策设计，避免把模型推向无效下一步

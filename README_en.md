@@ -4,7 +4,7 @@ English | [中文](README.md)
 
 An AI-first / AI-native JavaScript reverse engineering MCP server that lets coding assistants (Claude, Cursor, Copilot) debug, locate, save, and replay JavaScript behavior in real web pages like an analyst.
 
-It does not simply expose raw Chrome DevTools APIs to the model. It reorganizes scripts, breakpoints, network traffic, WebSocket data, browser state, and local file I/O into tools shaped for continuous AI Agent reasoning and action. Anti-detection is one supporting capability: default [Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-nodejs) protocol-layer stealth, plus optional [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) source-level fingerprint mode for strong anti-bot sites.
+It does not simply expose raw Chrome DevTools APIs to the model. It reorganizes scripts, breakpoints, network traffic, WebSocket data, browser state, and local file I/O into tools shaped for continuous AI Agent reasoning and action. Anti-detection is one supporting capability: protocol-layer stealth comes from a dedicated [Patchright fork](https://github.com/zhizhuodemao/patchright-mcp) rebuilt and maintained for this MCP, plus optional [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) source-level fingerprint mode for strong anti-bot sites.
 
 ## ☁️ Sponsored by Bloome
 
@@ -31,7 +31,20 @@ In short: upgrade from "me + one assistant" to "my team + a group of collaborati
 - **Network & WebSocket analysis**: request initiator stacks, XHR breakpoints, Set-Cookie detection, raw body/header export, WebSocket message grouping
 - **Browser-state replay**: clear current-site cookies, cache, storage, and sessionStorage to reproduce cookie and anti-bot initialization flows
 - **Headed + persistent by default**: visible browser, cookies and localStorage survive across sessions
-- **Optional anti-detection layer**: Patchright protocol-layer stealth by default; add `--cloak` for CloakBrowser on strong anti-bot sites
+- **Dedicated Patchright core**: uses a project-maintained Patchright fork that continuously addresses known shared upstream implementation characteristics
+- **Optional anti-detection layer**: dedicated Patchright protocol-layer stealth by default; add `--cloak` for CloakBrowser on strong anti-bot sites
+
+## Dedicated Patchright Fork
+
+js-reverse-mcp no longer depends directly on the general Patchright distribution. It uses [`@zhizhuodemao/patchright`](https://www.npmjs.com/package/@zhizhuodemao/patchright), rebuilt specifically for this MCP and maintained in a dedicated repository.
+
+- No direct dependency on the general Patchright distribution
+- Protocol-level adjustments and a dedicated build for confirmed shared upstream implementation characteristics
+- Anti-detection adjustments do not rely on page-level JavaScript injection
+- Original evaluate, locator, and page-control capabilities remain available
+- Ongoing maintenance in a repository dedicated to this MCP
+
+Public documentation describes only the design boundary, not internal detection samples or implementation details. The fork aims to reduce confirmed shared implementation characteristics; it does not claim that browser automation is absolutely undetectable.
 
 ## Requirements
 
@@ -107,18 +120,18 @@ Several design choices show up throughout the codebase:
 - **Outputs should guide the next action**: list output stays short and scannable; detail output is bounded; large results point to export paths; pending requests explicitly tell the Agent to resume before reading response data instead of waiting forever.
 - **Local files are the analysis workbench**: `save_script_source`, `list_network_requests(..., outputFile)`, and `evaluate_script(..., localFilePath)` let the Agent move between browser state, network captures, and local files without stuffing huge code or binary blobs into chat context.
 - **State can be cleaned and replayed**: the default profile preserves login state; `--isolated` gives a disposable clean environment; `clear_site_data` clears current-site state for repeated cookie-generation, risk-control, and request-chain analysis.
-- **Anti-detection serves the debugging loop**: silent CDP navigation, real viewport, Google referer, Patchright, and CloakBrowser exist so the Agent can enter the target page and keep analyzing. This project is not a generic crawler framework.
+- **Anti-detection serves the debugging loop**: silent CDP navigation, real viewport, Google referer, the dedicated Patchright fork, and CloakBrowser exist so the Agent can enter the target page and keep analyzing. This project is not a generic crawler framework.
 
 ## Anti-Detection (Supporting Capability)
 
 Anti-detection is one of js-reverse-mcp's supporting capabilities. The wrapper itself injects **zero** JavaScript and runs no `Object.defineProperty` hacks — those would themselves become detectable. All anti-detection happens in two well-separated layers:
 
-| Layer                                 | Default mode                                                                                                      | `--cloak` mode                                                                                                                                 |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Protocol layer** (CDP)              | Patchright: skips `Runtime.enable`/`Console.enable`, evaluates in isolated worlds, strips automation launch flags | Same                                                                                                                                           |
-| **Source layer** (C++ binary patches) | None — uses system Google Chrome as-is                                                                            | CloakBrowser binary with platform-specific source patches for `navigator.webdriver`, canvas, WebGL, audio, GPU, fonts, screen, WebRTC, and TLS |
-| **Profile directory**                 | `~/.cache/chrome-devtools-mcp/chrome-profile` (persistent login)                                                  | `~/.cache/chrome-devtools-mcp/cloak-profile` (physically isolated from the default)                                                            |
-| **Browser used**                      | Your installed Google Chrome (with Web Store, extensions, sync)                                                   | Custom Chromium build (no Google services, no Web Store)                                                                                       |
+| Layer                                 | Default mode                                                                                                                                                                                             | `--cloak` mode                                                                                                                                 |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Protocol layer** (CDP)              | Dedicated Patchright fork: skips `Runtime.enable`/`Console.enable`, evaluates in isolated worlds, strips automation launch flags, and continuously addresses known shared implementation characteristics | Same                                                                                                                                           |
+| **Source layer** (C++ binary patches) | None — uses system Google Chrome as-is                                                                                                                                                                   | CloakBrowser binary with platform-specific source patches for `navigator.webdriver`, canvas, WebGL, audio, GPU, fonts, screen, WebRTC, and TLS |
+| **Profile directory**                 | `~/.cache/chrome-devtools-mcp/chrome-profile` (persistent login)                                                                                                                                         | `~/.cache/chrome-devtools-mcp/cloak-profile` (physically isolated from the default)                                                            |
+| **Browser used**                      | Your installed Google Chrome (with Web Store, extensions, sync)                                                                                                                                          | Custom Chromium build (no Google services, no Web Store)                                                                                       |
 
 Other navigation-level safeguards (both modes):
 
